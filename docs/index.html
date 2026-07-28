@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FLUG-OS {-1, 0, +1} — 802.11 Packet-Wave Sampler</title>
+  <meta name="description" content="FLUG-OS: Fluid Operating System for the Flipper Zero WiFi Module v1. Captures 802.11 frames as raw wave data for generative music.">
+  <meta property="og:title" content="FLUG-OS {-1, 0, +1}">
+  <meta property="og:description" content="802.11 packet-wave sampler for Flipper Zero. RSSI → amplitude. Frame type → frequency. Density → rhythm.">
+  <meta property="og:url" content="https://8b-is.github.io/FLUG-OS/">
+  <meta name="twitter:card" content="summary_large_image">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #070B16; color: #E0E8F5; font-family: 'JetBrains Mono', monospace; line-height: 1.6; }
+    .container { max-width: 800px; margin: 0 auto; padding: 40px 20px; }
+    h1 { font-size: 2.5em; margin-bottom: 8px; background: linear-gradient(135deg, #00D4FF, #8B5CF6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .subtitle { color: #6878A0; font-size: 0.9em; margin-bottom: 40px; }
+    .tag {-1, 0, +1} { color: #00D4FF; font-size: 1.2em; }
+    h2 { color: #00D4FF; font-size: 1.1em; margin: 32px 0 12px; }
+    p, li { color: #A0A8C0; font-size: 0.9em; line-height: 1.7; }
+    a { color: #8B5CF6; text-decoration: none; }
+    a:hover { color: #00D4FF; }
+    code { background: #0A0A14; padding: 2px 6px; border-radius: 3px; font-size: 0.85em; color: #00E660; }
+    pre { background: #0A0A14; padding: 16px; border-radius: 8px; overflow-x: auto; margin: 12px 0; border: 1px solid #26304A; }
+    .cmd { color: #FFB020; }
+    ul { padding-left: 20px; }
+    li { margin-bottom: 6px; }
+    .badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 0.75em; font-weight: 600; margin-right: 6px; }
+    .badge-green { background: #00E66022; color: #00E660; border: 1px solid #00E66044; }
+    .badge-blue { background: #00D4FF22; color: #00D4FF; border: 1px solid #00D4FF44; }
+    .badge-purple { background: #8B5CF622; color: #8B5CF6; border: 1px solid #8B5CF644; }
+    hr { border: none; border-top: 1px solid #26304A; margin: 40px 0; }
+    .footer { color: #6878A0; font-size: 0.8em; text-align: center; margin-top: 60px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>FLUG-OS {-1, 0, +1}</h1>
+    <p class="subtitle">Fluid Operating System for the Flipper Zero WiFi Module v1<br>
+    802.11 Packet-Wave Sampler · RSSI → Amplitude · Frame Type → Frequency</p>
+
+    <p>
+      <span class="badge badge-green">ESP8285</span>
+      <span class="badge badge-blue">Flipper Zero</span>
+      <span class="badge badge-purple">{-1, 0, +1}</span>
+      <span class="badge badge-green">promiscuous mode</span>
+    </p>
+
+    <h2>What it does</h2>
+    <p>Turns your Flipper Zero WiFi Module into a raw 802.11 wave sampler.
+    Every WiFi packet becomes a musical note. RSSI becomes amplitude.
+    Frame type determines frequency. Packet density drives rhythm.</p>
+    <p>Piped into <strong>music.vaked.dev</strong>, the ambient WiFi spectrum becomes
+    generative music — the invisible made audible.</p>
+
+    <h2>Wave output modes</h2>
+    <pre><span class="cmd">mode raw</span>   → "0.750 0.320 0"     RSSI density type
+<span class="cmd">mode wave</span>  → "0.4231"             synthesized sinusoid
+<span class="cmd">mode json</span>  → {"rssi","freq"...}  structured musical JSON</pre>
+
+    <h2>Commands</h2>
+    <pre><span class="cmd">ch 6</span>           Set channel 1-13
+<span class="cmd">hop</span>           Channel hopping
+<span class="cmd">mode raw|wave|json</span>  Wave output mode
+<span class="cmd">filter mgmt|data|ctrl|all</span>  Frame type filter
+<span class="cmd">stats</span>         Capture statistics
+<span class="cmd">reset</span>         Reset counters</pre>
+
+    <h2>Flash it</h2>
+    <pre>git clone https://github.com/8b-is/FLUG-OS.git
+cd FLUG-OS
+pio run -e esp8285 -t upload</pre>
+
+    <h2>Listen</h2>
+    <pre>python3 bridge/wave_bridge.py /dev/tty.usbserial-XXXX \
+  --mode wave --dump | play -t raw -r 44100 -e float -b 32 -</pre>
+
+    <h2>Architecture</h2>
+    <pre>802.11 spectrum → ESP8285 → UART → bridge → music.vaked.dev
+     ↕                                   ↕
+  ambient packets                   generated audio</pre>
+
+    <h2>Ecosystem</h2>
+    <p>FLUG-OS is part of the <strong>8b-is constellation</strong>:</p>
+    <ul>
+      <li><a href="https://github.com/8b-is/hf-mac">HF-MAC{-1,0,+1}</a> — macOS Hugging Face client</li>
+      <li><a href="https://github.com/entropy-om/entheai">entheai</a> — agent with MEM8 wave memory</li>
+      <li><a href="https://github.com/8b-is/ayeos">ayeOS</a> — ternary inference daemon</li>
+      <li><a href="https://github.com/8b-is/MLX-QUANT">MLX-QUANT</a> — Metal GPU ternary kernels</li>
+      <li><a href="https://github.com/8b-is/FLUG-OS">FLUG-OS</a> — this</li>
+    </ul>
+    <p>All ternary. All aligned. {-1, 0, +1}</p>
+
+    <hr>
+    <p class="footer">Built by the 8b-is constellation. 🜂 {-1, 0, +1} — ennyi elég.</p>
+  </div>
+</body>
+</html>

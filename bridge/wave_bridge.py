@@ -3,35 +3,35 @@
 FLUG-OS Wave Bridge — pipe raw 802.11 packet waves to music.vaked.dev.
 
 Reads wave output from FLUG-OS over serial, formats for generative music,
-and streams to music.vaked.dev (or any WebSocket/MIDI endpoint).
+and streams to music.vaked.dev (or any HTTP endpoint).
 
 Usage:
-  python3 bridge/wave_bridge.py /dev/tty.usbserial-XXXX  # read from device
-  python3 bridge/wave_bridge.py --mode wave /dev/tty.wchusbserial*  # synth wave mode
-  python3 bridge/wave_bridge.py --http http://localhost:8080/wave /dev/tty.*
+  python3 bridge/wave_bridge.py /dev/tty.usbserial-XXXX         # read + dump
+  python3 bridge/wave_bridge.py --mode wave /dev/tty.wchusbserial*  # synth waves
+  python3 bridge/wave_bridge.py --http https://music.vaked.dev/wave /dev/tty.*
 """
 
 import argparse
 import json
 import math
-import serial
 import sys
 import time
 import urllib.request
+from typing import Optional
 
-# ============================================================
-# Wave packet → musical parameters
-# ============================================================
+
 NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
-def freq_to_midi(freq):
+
+def freq_to_midi(freq: float) -> float:
     """Convert frequency to MIDI note number."""
     if freq <= 0:
         return 0
     return 69 + 12 * math.log2(freq / 440.0)
 
-def freq_to_note(freq):
-    """Convert frequency to nearest note name."""
+
+def freq_to_note(freq: float) -> str:
+    """Convert frequency to nearest note name (e.g. 'A4')."""
     midi = freq_to_midi(freq)
     if midi <= 0:
         return "---"
@@ -39,147 +39,212 @@ def freq_to_note(freq):
     octave = int(round(midi)) // 12 - 1
     return f"{NOTE_NAMES[note_idx]}{octave}"
 
+
 # ============================================================
-# Parse FLUG-OS raw wave line
+# Line parsers for each FLUG-OS wave mode
 # ============================================================
-def parse_raw_line(line):
-    """Parse raw mode: 'rssi density type'"""
+
+def parse_raw_line(line: str) -> Optional[dict]:
+    """Parse raw mode: 'RSSI DENSITY TYPE' → dict."""
     parts = line.strip().split()
-    if len(parts) >= 3:
+    if len(parts) < 3:
+        return None
+    try:
         return {
             "rssi": float(parts[0]),
             "density": float(parts[1]),
             "frame_type": int(parts[2]),
         }
-    return None
+    except (ValueError, IndexError):
+        return None
 
-def parse_wave_line(line):
-    """Parse wave mode: single float"""
+
+def parse_wave_line(line: str) -> Optional[dict]:
+    """Parse wave mode: single float sample."""
     try:
         return {"wave": float(line.strip())}
     except ValueError:
         return None
 
-def parse_json_line(line):
-    """Parse JSON mode"""
+
+def parse_json_line(line: str) -> Optional[dict]:
+    """Parse JSON mode: structured musical data."""
     try:
         return json.loads(line.strip())
     except json.JSONDecodeError:
         return None
 
+
+PARSERS = {
+    "raw": parse_raw_line,
+    "wave": parse_wave_line,
+    "json": parse_json_line,
+}
+
+
 # ============================================================
-# Music.vaked.dev format
+# FLUG-OS data → music.vaked.dev format
 # ============================================================
-def to_music_vaked(data):
-    """Convert FLUG-OS wave data to music.vaked.dev API format."""
+
+def to_music_vaked(data: dict) -> dict:
+    """Convert FLUG-OS wave data to music.vaked.dev compatible format."""
+    ts = int(time.time() * 1000)
+
     if "freq" in data:
         midi = freq_to_midi(data["freq"])
-        note = freq_to_note(data["freq"])
         return {
-            "note": note,
+            "note": freq_to_note(data["freq"]),
             "midi": round(midi),
             "velocity": round(data.get("rssi", 0.5) * 127),
-            "duration": data.get("density", 0.5),
+            "duration_sec": data.get("density", 0.5),
             "source": "flug-os",
-            "timestamp": int(time.time() * 1000),
+            "timestamp_ms": ts,
         }
-    elif "wave" in data:
-        # Pure waveform sample
+
+    if "wave" in data:
         return {
             "sample": data["wave"],
             "source": "flug-os",
-            "timestamp": int(time.time() * 1000),
-        }
-    else:
-        rssi = data.get("rssi", 0.5)
-        return {
-            "note": freq_to_note(220 + rssi * 300),
-            "velocity": round(rssi * 127),
-            "source": "flug-os",
-            "timestamp": int(time.time() * 1000),
+            "timestamp_ms": ts,
         }
 
+    rssi = data.get("rssi", 0.5)
+    return {
+        "note": freq_to_note(220 + rssi * 300),
+        "velocity": round(rssi * 127),
+        "source": "flug-os",
+        "timestamp_ms": ts,
+    }
+
+
 # ============================================================
-# Streaming
+# HTTP streaming
 # ============================================================
-def stream_to_http(data, url):
-    """Send wave data to HTTP endpoint."""
+
+_http_ok = True  # only warn once
+
+def stream_to_http(data: dict, url: str):
+    """Send wave data to HTTP endpoint. Fire-and-forget with one-time warning."""
+    global _http_ok
     try:
         payload = json.dumps(data).encode()
-        req = urllib.request.Request(url, data=payload,
-            headers={"Content-Type": "application/json"})
-        urllib.request.urlopen(req, timeout=1)
-    except Exception:
-        pass  # fire-and-forget
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=2)
+    except Exception as e:
+        if _http_ok:
+            print(f"[bridge] HTTP error: {e}", file=sys.stderr)
+            _http_ok = False
+
 
 # ============================================================
-# Main loop
+# Serial reader with auto-reconnect
 # ============================================================
+
+def open_serial(port: str, baud: int, max_retries: int = 3):
+    """Open serial port with retries."""
+    import serial
+
+    for attempt in range(max_retries):
+        try:
+            ser = serial.Serial(port, baud, timeout=1)
+            return ser
+        except serial.SerialException as e:
+            if attempt < max_retries - 1:
+                print(f"[bridge] retrying serial ({attempt+1}/{max_retries}): {e}", file=sys.stderr)
+                time.sleep(2)
+            else:
+                print(f"[bridge] failed to open {port}: {e}", file=sys.stderr)
+                sys.exit(1)
+    return None  # unreachable
+
+
+# ============================================================
+# Main
+# ============================================================
+
 def main():
     parser = argparse.ArgumentParser(
-        description="FLUG-OS Wave Bridge — pipe WiFi packet waves to music.vaked.dev")
+        description="FLUG-OS Wave Bridge — pipe WiFi packet waves to music.vaked.dev",
+    )
     parser.add_argument("port", help="Serial port (e.g., /dev/tty.usbserial-*)")
     parser.add_argument("--baud", type=int, default=115200, help="Baud rate")
-    parser.add_argument("--mode", choices=["raw", "wave", "json"], default="json",
-                       help="FLUG-OS wave output mode")
+    parser.add_argument(
+        "--mode",
+        choices=["raw", "wave", "json"],
+        default="json",
+        help="FLUG-OS wave output mode (default: json)",
+    )
     parser.add_argument("--http", help="HTTP endpoint URL for wave data")
     parser.add_argument("--dump", action="store_true", help="Dump parsed data to stdout")
     args = parser.parse_args()
 
-    # Open serial
-    try:
-        ser = serial.Serial(args.port, args.baud, timeout=1)
-    except serial.SerialException as e:
-        print(f"Error opening {args.port}: {e}", file=sys.stderr)
-        sys.exit(1)
+    # Open serial (with retries)
+    ser = open_serial(args.port, args.baud)
 
-    print(f"FLUG-OS Wave Bridge — reading from {args.port} @ {args.baud}")
-    print(f"Output mode: {args.mode}")
-    if args.http:
-        print(f"HTTP endpoint: {args.http}")
-    print()
+    print(f"[bridge] FLUG-OS on {args.port} @ {args.baud}")
+    print(f"[bridge] mode={args.mode}" + (f" http={args.http}" if args.http else ""))
 
-    # Wait for device boot
-    time.sleep(2)
-    ser.flushInput()
+    # Wait for device boot and flush boot messages
+    time.sleep(2.5)
+    ser.reset_input_buffer()
 
-    # Set wave mode
+    # Send wave mode command
     ser.write(f"mode {args.mode}\n".encode())
-    time.sleep(0.1)
+    time.sleep(0.2)
 
-    parsers = {
-        "raw": parse_raw_line,
-        "wave": parse_wave_line,
-        "json": parse_json_line,
-    }
-    parser_fn = parsers[args.mode]
+    parser_fn = PARSERS[args.mode]
     buf = b""
+    line_count = 0
 
     try:
         while True:
-            data = ser.read(1024)
+            try:
+                data = ser.read(1024)
+            except serial.SerialException:
+                print("[bridge] serial disconnected, reconnecting...", file=sys.stderr)
+                ser.close()
+                time.sleep(2)
+                ser = open_serial(args.port, args.baud)
+                ser.write(f"mode {args.mode}\n".encode())
+                continue
+
             if not data:
                 continue
+
             buf += data
+
             while b"\n" in buf:
-                line, buf = buf.split(b"\n", 1)
-                try:
-                    text = line.decode("utf-8", errors="replace").strip()
-                    if not text:
-                        continue
-                    parsed = parser_fn(text)
-                    if parsed:
-                        music_data = to_music_vaked(parsed)
-                        if args.dump:
-                            print(json.dumps(music_data))
-                        if args.http:
-                            stream_to_http(music_data, args.http)
-                except Exception as e:
-                    print(f"Parse error: {e}", file=sys.stderr)
+                line_bytes, buf = buf.split(b"\n", 1)
+                text = line_bytes.decode("utf-8", errors="replace").strip()
+                if not text:
+                    continue
+
+                parsed = parser_fn(text)
+                if not parsed:
+                    continue
+
+                music_data = to_music_vaked(parsed)
+                line_count += 1
+
+                if args.dump:
+                    print(json.dumps(music_data, ensure_ascii=False))
+
+                if args.http:
+                    stream_to_http(music_data, args.http)
+
+                if line_count % 1000 == 0:
+                    print(f"[bridge] {line_count} waves streamed", file=sys.stderr)
+
     except KeyboardInterrupt:
-        print("\nBridge stopped.")
+        print(f"\n[bridge] stopped. {line_count} waves streamed.")
     finally:
         ser.close()
+
 
 if __name__ == "__main__":
     main()

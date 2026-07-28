@@ -3,14 +3,13 @@
  * 802.11 Packet Analyzer for Flipper Zero WiFi Module v1 (ESP8285)
  *
  * Captures frames in promiscuous mode, parses 802.11 headers,
- * outputs structured JSON over UART.
+ * outputs structured JSON and raw wave data over UART.
  *
- * Part of the 8b-is stack. Ternary by design.
+ * Part of the 8b-is stack. Ternary by design. {-1, 0, +1}
  * For educational/defensive use on your own networks only.
  */
 
 #include <ESP8266WiFi.h>
-#include <espnow.h>
 #include "wave_output.h"
 #include <string.h>
 
@@ -19,18 +18,17 @@
 // ============================================================
 #define UART_BAUD       115200
 #define MAX_CHANNEL     13
-#define CHANNEL_HOP_MS  1000       // ms per channel when hopping
-#define STATS_INTERVAL  10000      // ms between stats reports
+#define CHANNEL_HOP_MS  1000
+#define STATS_INTERVAL  10000
 #define MAX_SSID_LEN    32
-#define MAX_SRC_LEN     18         // "aa:bb:cc:dd:ee:ff\0"
+#define MAX_SRC_LEN     18
 #define OUTPUT_BUF_LEN  256
+#define CMD_BUF_LEN     64
 
-// Frame type constants
 #define TYPE_MGMT       0
 #define TYPE_CTRL       1
 #define TYPE_DATA       2
 
-// Management subtypes
 #define SUB_BEACON      8
 #define SUB_PROBE_REQ   4
 #define SUB_PROBE_RESP  5
@@ -46,10 +44,9 @@ static int current_channel = 1;
 static bool channel_hopping = false;
 static unsigned long last_hop = 0;
 static unsigned long last_stats = 0;
-static int filter_type = -1;  // -1 = all
+static int filter_type = -1;
 
-// Statistics
-static struct {
+typedef struct {
     uint32_t total;
     uint32_t mgmt;
     uint32_t ctrl;
@@ -60,17 +57,19 @@ static struct {
     uint32_t unknown;
     int8_t   min_rssi;
     int8_t   max_rssi;
-} stats = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+} Stats;
+
+static Stats stats = {0};
 
 // ============================================================
-// Type/Subtype name strings
+// Type name helpers
 // ============================================================
 static const char* type_name(int type) {
     switch (type) {
         case TYPE_MGMT: return "mgmt";
         case TYPE_CTRL: return "ctrl";
         case TYPE_DATA: return "data";
-        default:        return "unknown";
+        default:        return "unk";
     }
 }
 
@@ -84,35 +83,31 @@ static const char* subtype_name(int type, int subtype) {
             case SUB_DEAUTH:     return "deauth";
             case SUB_ASSOC_REQ:  return "assoc_req";
             case SUB_ASSOC_RESP: return "assoc_resp";
-            default:             return "mgmt_other";
+            default:             return "mgmt";
         }
     }
     if (type == TYPE_DATA) return "data";
     if (type == TYPE_CTRL) return "ctrl";
-    return "other";
+    return "unk";
 }
 
-// ============================================================
-// MAC address formatting
-// ============================================================
 static void mac_str(const uint8_t* mac, char* out) {
     sprintf(out, "%02x:%02x:%02x:%02x:%02x:%02x",
             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
 // ============================================================
-// 802.11 frame header parsing
+// 802.11 frame structures
 // ============================================================
 typedef struct __attribute__((packed)) {
     uint16_t frame_control;
     uint16_t duration;
-    uint8_t  addr1[6];   // destination
-    uint8_t  addr2[6];   // source / transmitter
-    uint8_t  addr3[6];   // BSSID
+    uint8_t  addr1[6];
+    uint8_t  addr2[6];
+    uint8_t  addr3[6];
     uint16_t seq_ctrl;
 } WifiFrameHeader;
 
-// 802.11 Beacon frame fixed parameters
 typedef struct __attribute__((packed)) {
     uint64_t timestamp;
     uint16_t beacon_interval;
@@ -120,27 +115,21 @@ typedef struct __attribute__((packed)) {
 } BeaconFixed;
 
 // ============================================================
-// Promiscuous callback — called for every captured frame
+// Promiscuous callback
 // ============================================================
 static void promisc_cb(uint8_t* buf, uint16_t len) {
     if (len < sizeof(WifiFrameHeader)) return;
 
-    // Get RSSI from last byte of buffer (ESP8266 appends it)
-    int8_t rssi = 0;
-    if (len >= 2) {
-        // The ESP8266 stores RSSI at the end of the buffer
-        rssi = (int8_t)buf[len - 1];
-    }
+    // RSSI from last byte (ESP8266 SDK convention)
+    int8_t rssi = (len >= 2) ? (int8_t)buf[len - 1] : 0;
 
     WifiFrameHeader* hdr = (WifiFrameHeader*)buf;
     uint16_t fctl = hdr->frame_control;
     int type = (fctl >> 2) & 0x03;
     int subtype = (fctl >> 4) & 0x0F;
 
-    // Apply filter
     if (filter_type >= 0 && type != filter_type) return;
 
-    // Update stats
     stats.total++;
     if (rssi < stats.min_rssi) stats.min_rssi = rssi;
     if (rssi > stats.max_rssi) stats.max_rssi = rssi;
@@ -155,19 +144,17 @@ static void promisc_cb(uint8_t* buf, uint16_t len) {
     if (type == TYPE_MGMT && subtype == SUB_DEAUTH) stats.deauth++;
     if (type == TYPE_MGMT && subtype == SUB_PROBE_REQ) stats.probe_req++;
 
-    // Build output
-    char src[MAX_SRC_LEN] = "?";
-    char dst[MAX_SRC_LEN] = "?";
-    char bssid[MAX_SRC_LEN] = "?";
+    // MAC addresses
+    char src[MAX_SRC_LEN], dst[MAX_SRC_LEN], bssid[MAX_SRC_LEN];
     mac_str(hdr->addr2, src);
     mac_str(hdr->addr1, dst);
     mac_str(hdr->addr3, bssid);
 
+    // Beacon/probe SSID + params
     char ssid[MAX_SSID_LEN + 1] = "";
     uint16_t beacon_interval = 0;
     uint16_t cap_info = 0;
 
-    // Parse beacon/probe response for SSID and params
     if (type == TYPE_MGMT && (subtype == SUB_BEACON || subtype == SUB_PROBE_RESP)) {
         size_t offset = sizeof(WifiFrameHeader);
         if (subtype == SUB_BEACON && offset + sizeof(BeaconFixed) <= len) {
@@ -178,8 +165,7 @@ static void promisc_cb(uint8_t* buf, uint16_t len) {
         } else if (subtype == SUB_PROBE_RESP) {
             offset += sizeof(BeaconFixed);
         }
-
-        // Parse tagged parameters (SSID is tag 0)
+        // Tag parser (SSID is tag 0)
         while (offset + 2 <= len) {
             uint8_t tag = buf[offset];
             uint8_t tag_len = buf[offset + 1];
@@ -193,7 +179,7 @@ static void promisc_cb(uint8_t* buf, uint16_t len) {
         }
     }
 
-    // Check for deauth reason code
+    // Deauth reason code
     uint16_t reason = 0;
     if (type == TYPE_MGMT && subtype == SUB_DEAUTH) {
         size_t off = sizeof(WifiFrameHeader);
@@ -224,9 +210,9 @@ static void promisc_cb(uint8_t* buf, uint16_t len) {
         n += snprintf(out + n, sizeof(out) - n, ",\"reason\":%u", reason);
     }
     snprintf(out + n, sizeof(out) - n, "}\n");
-
     Serial.print(out);
-    // Wave output for sonification / music.vaked.dev
+
+    // Wave output for sonification
     output_wave(rssi, type, subtype, millis());
 }
 
@@ -239,12 +225,16 @@ static void handle_command(const char* line) {
         if (ch >= 1 && ch <= MAX_CHANNEL) {
             current_channel = ch;
             wifi_set_channel(current_channel);
-            Serial.printf("{\"cmd\":\"chan\",\"ch\":%d}\n", current_channel);
+            Serial.printf("{\"cmd\":\"ch\",\"val\":%d}\n", current_channel);
         }
     }
     else if (strcmp(line, "hop") == 0) {
         channel_hopping = !channel_hopping;
-        Serial.printf("{\"cmd\":\"hop\",\"en\":%d}\n", channel_hopping ? 1 : 0);
+        Serial.printf("{\"cmd\":\"hop\",\"en\":%d}\n", channel_hopping);
+    }
+    else if (strncmp(line, "mode ", 5) == 0) {
+        set_wave_mode(line + 5);
+        Serial.printf("{\"cmd\":\"mode\",\"val\":\"%s\"}\n", line + 5);
     }
     else if (strncmp(line, "filter ", 7) == 0) {
         const char* f = line + 7;
@@ -252,17 +242,13 @@ static void handle_command(const char* line) {
         else if (strcmp(f, "data") == 0) filter_type = TYPE_DATA;
         else if (strcmp(f, "ctrl") == 0) filter_type = TYPE_CTRL;
         else if (strcmp(f, "all") == 0) filter_type = -1;
-        Serial.printf("{\"cmd\":\"filter\",\"type\":\"%s\"}\n", f);
-    else if (strncmp(line, "mode ", 5) == 0) {
-        set_wave_mode(line + 5);
-        Serial.printf("{"cmd":"mode","mode":"%s"}\n", line + 5);
-    }
+        Serial.printf("{\"cmd\":\"filter\",\"val\":\"%s\"}\n", f);
     }
     else if (strcmp(line, "stats") == 0) {
         Serial.printf("{\"cmd\":\"stats\",\"total\":%u,\"mgmt\":%u,"
                       "\"ctrl\":%u,\"data\":%u,\"beacon\":%u,"
-                      "\"deauth\":%u,\"probe_req\":%u,"
-                      "\"min_rssi\":%d,\"max_rssi\":%d}\n",
+                      "\"deauth\":%u,\"probe\":%u,"
+                      "\"rssi_min\":%d,\"rssi_max\":%d}\n",
                       stats.total, stats.mgmt, stats.ctrl, stats.data,
                       stats.beacon, stats.deauth, stats.probe_req,
                       stats.min_rssi, stats.max_rssi);
@@ -272,7 +258,7 @@ static void handle_command(const char* line) {
         Serial.printf("{\"cmd\":\"reset\"}\n");
     }
     else {
-        Serial.printf("{\"cmd\":\"unknown\",\"line\":\"%s\"}\n", line);
+        Serial.printf("{\"cmd\":\"?\",\"line\":\"%s\"}\n", line);
     }
 }
 
@@ -281,25 +267,20 @@ static void handle_command(const char* line) {
 // ============================================================
 void setup() {
     Serial.begin(UART_BAUD);
-    delay(100);
+    delay(200);
 
-    Serial.printf("{\"boot\":\"FLUG-OS\",\"ver\":\"0.1.0\"}\n");
-    Serial.printf("{\"info\":\"802.11 packet analyzer — defensive use only\"}\n");
+    Serial.printf("{\"boot\":\"FLUG-OS\",\"ver\":\"0.2.0\",\"ternary\":\"{-1,0,+1}\"}\n");
 
-    // Set ESP8266 to station mode for promiscuous
     wifi_set_opmode(STATION_MODE);
     wifi_set_channel(current_channel);
 
-    // Set promiscuous callback
     wifi_promiscuous_enable(0);
     wifi_set_promiscuous_rx_cb(promisc_cb);
     wifi_promiscuous_enable(1);
-
-    // Set packet filter: all frame types (or specific)
-    // ESP8266 allows filtering by frame type
     wifi_promiscuous_set_filter(WIFI_PKT_MGMT | WIFI_PKT_CTRL | WIFI_PKT_DATA);
 
-    Serial.printf("{\"info\":\"sniffing on ch %d — send ch <n>, hop, filter <type>, stats, reset\"}\n",
+    Serial.printf("{\"ready\":true,\"ch\":%d,"
+                  "\"cmds\":\"ch <n> | hop | mode raw|wave|json | filter mgmt|data|ctrl|all | stats | reset\"}\n",
                   current_channel);
 
     last_hop = millis();
@@ -321,14 +302,16 @@ void loop() {
         last_hop = now;
     }
 
-    // Periodic stats
+    // Feed the watchdog
+    ESP.wdtFeed();
+
+    // Periodic stats heartbeat (quiet, every STATS_INTERVAL)
     if (now - last_stats >= STATS_INTERVAL) {
-        // Quiet stats update — don't spam the serial line
         last_stats = now;
     }
 
-    // Read commands from serial
-    static char cmd_buf[64];
+    // Serial command buffer
+    static char cmd_buf[CMD_BUF_LEN];
     static size_t cmd_pos = 0;
 
     while (Serial.available()) {
@@ -344,6 +327,5 @@ void loop() {
         }
     }
 
-    // Small yield for ESP8266 WiFi stack
-    delay(1);
+    yield();
 }
