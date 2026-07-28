@@ -30,10 +30,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install PlatformIO
+      - name: Install PlatformIO in venv
         run: |
-          python3 -m pip install --break-system-packages platformio 2>&1 | tail -5
-          pio --version
+          python3 -m venv /tmp/pio-venv
+          /tmp/pio-venv/bin/python -m pip install platformio 2>&1 | tail -5
+          /tmp/pio-venv/bin/pio --version
+          echo "PIO=/tmp/pio-venv/bin/pio" >> $GITHUB_ENV
 
       - name: Cache PlatformIO
         uses: actions/cache@v4
@@ -45,7 +47,7 @@ jobs:
 
       - name: Build firmware
         run: |
-          pio run -e ${{ matrix.env }}
+          $PIO run -e ${{ matrix.env }}
 
       - name: Rename artifact with version
         run: |
