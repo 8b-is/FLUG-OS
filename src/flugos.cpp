@@ -215,7 +215,7 @@ static void promisc_cb(uint8_t* buf, uint16_t len) {
     Serial.print(out);
 
     // Record for UI visualization
-    record_packet(current_channel, rssi);
+    record_packet(current_channel, rssi, ssid);
 
     // Wave output for sonification
     output_wave(rssi, type, subtype, millis());
