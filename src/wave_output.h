@@ -46,9 +46,9 @@ static uint16_t packet_count = 0;
 
 static void set_wave_mode(const char* mode) {
     if (!mode) return;
-    if (strcmp(mode, "raw") == 0)  wave_mode = MODE_RAW;
-    if (strcmp(mode, "wave") == 0) wave_mode = MODE_WAVE;
-    if (strcmp(mode, "json") == 0) wave_mode = MODE_JSON;
+    if (strcmp(mode, "raw") == 0) wave_mode = MODE_RAW;
+    else if (strcmp(mode, "wave") == 0) wave_mode = MODE_WAVE;
+    else if (strcmp(mode, "json") == 0) wave_mode = MODE_JSON;
 }
 
 // Normalize RSSI to [0, 1] for sine kernel input
@@ -107,7 +107,8 @@ static void output_wave(int8_t rssi, int type, int subtype, unsigned long ts) {
     if (density > 1.0f) density = 1.0f;
 
     // Axiom Quant: sine kernel applied to RSSI as spectral parameter
-    float kernel_val = sine_kernel(rssi_norm * 10.0f);  // scale to spectral range
+    // Scale RSSI [0,1] to spectral range [0,3] — first lobe of K(u)
+    float kernel_val = sine_kernel(rssi_norm * 3.0f);
     int8_t domain = threshold_domain(density);
 
     switch (wave_mode) {
@@ -119,14 +120,11 @@ static void output_wave(int8_t rssi, int type, int subtype, unsigned long ts) {
 
         case MODE_WAVE:
             {
-                // Sine kernel wave: K(u) * sin(2πft + φ) * RSSI
-                // axiomquant.org universal kernel governs the amplitude envelope
                 float t = (float)(ts % 10000) / 10000.0f;
                 float phase = (float)(type * 100 + subtype * 10);
-                float wave = sinf(2.0f * PI * (freq / 440.0f) * t + phase) * kernel_val;
-                Serial.printf("~ %.4f %d\n", wave, domain);
-                // Second line: raw sine kernel value for axiomquant analysis
-                Serial.printf("K %.4f %.3f %d\n", kernel_val, density, domain);
+                // wave = sine envelope × carrier, domain = threshold tag, K = kernel value
+                float wave = sinf(2.0f * (float)PI * (freq / 440.0f) * t + phase) * kernel_val;
+                Serial.printf("~ %.4f %d %.4f\n", wave, domain, kernel_val);
             }
             break;
 

@@ -40,7 +40,7 @@
 // ============================================================
 static uint32_t mac_seed(const uint8_t mac[6]) {
     // Fold 6 bytes into u32 via XOR + rotate
-    uint32_t s = 0x8B1S;  // 8b-is seed constant
+    uint32_t s = 0x8B1C;  // 8b-is seed constant
     for (int i = 0; i < 6; i++) {
         s ^= (uint32_t)mac[i] << ((i % 4) * 8);
         s = (s << 7) | (s >> 25);  // rotate

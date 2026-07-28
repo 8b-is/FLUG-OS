@@ -20,7 +20,7 @@
 #define CHANNEL_HOP_MS  1000
 #define STATS_INTERVAL  10000
 #define MAX_SSID_LEN    32
-#define MAX_SRC_LEN     18
+#define MAX_SRC_LEN     19      // "xx:xx:xx:xx:xx:xx\0" = 18 chars + null
 #define OUTPUT_BUF_LEN  256
 #define CMD_BUF_LEN     64
 
