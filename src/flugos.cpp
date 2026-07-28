@@ -1,10 +1,11 @@
 /*
- * Flipper WiFi Rev — 802.11 Packet Analyzer
- * Defensive firmware for Flipper Zero WiFi Module v1 (ESP8285)
+ * FLUG-OS — Fluid OS {-1, 0, +1}
+ * 802.11 Packet Analyzer for Flipper Zero WiFi Module v1 (ESP8285)
  *
- * Captures 802.11 frames in promiscuous mode, parses headers,
- * outputs structured data over UART for analysis.
+ * Captures frames in promiscuous mode, parses 802.11 headers,
+ * outputs structured JSON over UART.
  *
+ * Part of the 8b-is stack. Ternary by design.
  * For educational/defensive use on your own networks only.
  */
 
@@ -275,7 +276,7 @@ void setup() {
     Serial.begin(UART_BAUD);
     delay(100);
 
-    Serial.printf("{\"boot\":\"flipper-wifi-rev\",\"ver\":\"0.1.0\"}\n");
+    Serial.printf("{\"boot\":\"FLUG-OS\",\"ver\":\"0.1.0\"}\n");
     Serial.printf("{\"info\":\"802.11 packet analyzer — defensive use only\"}\n");
 
     // Set ESP8266 to station mode for promiscuous
