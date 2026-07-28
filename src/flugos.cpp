@@ -11,6 +11,7 @@
 
 #include <ESP8266WiFi.h>
 #include "wave_output.h"
+#include "ascii_ui.h"
 #include "version.h"
 
 // ============================================================
@@ -213,6 +214,9 @@ static void promisc_cb(uint8_t* buf, uint16_t len) {
     snprintf(out + n, sizeof(out) - n, "}\n");
     Serial.print(out);
 
+    // Record for UI visualization
+    record_packet(current_channel, rssi);
+
     // Wave output for sonification
     output_wave(rssi, type, subtype, millis());
 }
@@ -307,10 +311,14 @@ void setup() {
     Serial.printf("  ║  K(u)=sin(πu)/(πu) · 5 thresholds    ║\r\n");
     Serial.printf("  ║  Erdős β₁ · BitNet γ · Markowitz λ   ║\r\n");
     Serial.printf("  ║  Black-Scholes σ · Rényi dyadic β    ║\r\n");
-    Serial.printf("  ║  ch <n> · hop · mode raw|wave|json  ║\r\n");
-    Serial.printf("  ║  filter mgmt|data|ctrl|all · stats  ║\r\n");
+    Serial.printf("  ║  m=menu d=dashboard s=scan q=quiet  ║\r\n");
+    Serial.printf("  ║  ch <n> · hop · mode · filter · stats║\r\n");
     Serial.printf("  ╚══════════════════════════════════════╝\r\n");
     Serial.printf("\r\n");
+    Serial.printf("type 'm' for menu\r\n");
+    Serial.printf("\r\n");
+
+    init_ui();
 
     last_hop = millis();
     last_stats = millis();
@@ -345,6 +353,10 @@ void loop() {
 
     while (Serial.available()) {
         char c = Serial.read();
+        // Single-char UI commands (intercept before full command parser)
+        if (cmd_pos == 0 && handle_ui_command(c)) {
+            continue;
+        }
         if (c == '\n' || c == '\r') {
             if (cmd_pos > 0) {
                 cmd_buf[cmd_pos] = '\0';
@@ -355,6 +367,9 @@ void loop() {
             cmd_buf[cmd_pos++] = c;
         }
     }
+
+    // Periodic dashboard refresh
+    update_dashboard();
 
     yield();
 }
