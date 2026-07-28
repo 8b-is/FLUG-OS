@@ -81,38 +81,70 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
+      - name: Install OQS provider (post-quantum crypto)
+        run: |
+          brew install liboqs oqsprovider
+          echo "OQS_PROVIDER=$(brew --prefix oqsprovider)/lib/oqsprovider.dylib" >> $GITHUB_ENV
+          echo "OPENSSL_MODULES=$(brew --prefix oqsprovider)/lib" >> $GITHUB_ENV
+
+      - name: Generate ML-DSA firmware signing key
+        run: |
+          # ML-DSA-65 = NIST security level 3 (recommended for most uses)
+          # ML-DSA-87 = NIST security level 5 (highest)
+          openssl genpkey -algorithm ML-DSA-65 \
+            -out flugos-signing-mldsa65.key
+          openssl pkey -in flugos-signing-mldsa65.key -pubout \
+            -out flugos-signing-mldsa65.pub
+
+      - name: Generate SLH-DSA backup signing key
+        run: |
+          # SLH-DSA-SHAKE-128s = NIST security level 1, small signatures
+          openssl genpkey -algorithm SLH-DSA-SHAKE-128s \
+            -out flugos-signing-slhdsa.key
+          openssl pkey -in flugos-signing-slhdsa.key -pubout \
+            -out flugos-signing-slhdsa.pub
+
       - name: Generate SHA256 manifest
         run: |
           shasum -a 256 flugos-*.bin flugos-*.elf 2>/dev/null | tee flugos-sha256.txt
 
-      - name: Sign firmware with cosign (keyless)
+      - name: Sign firmware with ML-DSA (post-quantum primary)
         run: |
           for f in flugos-*.bin flugos-*.elf; do
             [ -f "$f" ] || continue
-            cosign sign-blob "$f" \
-              --signature "${f}.sig" \
-              --output-certificate "${f}.pem" \
-              --yes
-            echo "Signed: $f"
+            openssl dgst -sign flugos-signing-mldsa65.key \
+              -out "${f}.mldsa65.sig" "$f"
+            echo "ML-DSA-65 signed: $f"
           done
 
-      - name: Sign SHA256 manifest
-        run: |
-          cosign sign-blob flugos-sha256.txt \
-            --signature flugos-sha256.txt.sig \
-            --output-certificate flugos-sha256.txt.pem \
-            --yes
-
-      - name: Verify signatures
+      - name: Sign firmware with SLH-DSA (post-quantum backup)
         run: |
           for f in flugos-*.bin flugos-*.elf; do
             [ -f "$f" ] || continue
-            cosign verify-blob "$f" \
-              --signature "${f}.sig" \
-              --certificate "${f}.pem" \
-              --certificate-oidc-issuer https://github.com/login/oauth \
-              --certificate-identity ${{ github.actor }}@users.noreply.github.com
-            echo "Verified: $f"
+            openssl dgst -sign flugos-signing-slhdsa.key \
+              -out "${f}.slhdsa.sig" "$f"
+            echo "SLH-DSA signed: $f"
+          done
+
+      - name: Sign SHA256 manifest with ML-DSA
+        run: |
+          openssl dgst -sign flugos-signing-mldsa65.key \
+            -out flugos-sha256.txt.mldsa65.sig flugos-sha256.txt
+
+      - name: Verify ML-DSA signatures
+        run: |
+          for f in flugos-*.bin flugos-*.elf; do
+            [ -f "$f" ] || continue
+            openssl dgst -verify flugos-signing-mldsa65.pub \
+              -signature "${f}.mldsa65.sig" "$f" && echo "ML-DSA verified: $f"
+          done
+
+      - name: Verify SLH-DSA signatures
+        run: |
+          for f in flugos-*.bin flugos-*.elf; do
+            [ -f "$f" ] || continue
+            openssl dgst -verify flugos-signing-slhdsa.pub \
+              -signature "${f}.slhdsa.sig" "$f" && echo "SLH-DSA verified: $f"
           done
 
       - name: Create GitHub Release
@@ -123,7 +155,10 @@ jobs:
             flugos-*.elf
             flugos-*.sig
             flugos-*.pem
+            flugos-*.mldsa65.sig
+            flugos-*.slhdsa.sig
+            flugos-signing-mldsa65.pub
+            flugos-signing-slhdsa.pub
             flugos-sha256.txt
-            flugos-sha256.txt.sig
-            flugos-sha256.txt.pem
+            flugos-sha256.txt.mldsa65.sig
           generate_release_notes: true
