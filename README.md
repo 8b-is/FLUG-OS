@@ -36,7 +36,7 @@ Erdős β₁ · BitNet ternary γ · Markowitz λ · Black-Scholes σ · Rényi 
 
 Signed with **ML-DSA-65 + SLH-DSA** post-quantum signatures (NIST FIPS 203/204/205).
 
----
+**Roadmap:** https://github.com/8b-is/FLUG-OS/blob/main/ROADMAP.md — target v1.4.2 parity with MLX-QUANT.
 
 ## Quick start — 3 minutes
 
