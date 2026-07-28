@@ -1,23 +1,29 @@
-
-                                   ___
-                             ~~~~~|~~~ FLUG-OS
-        ___--~~~~~---__    ~~~~~ | ~~~
-  ___--~~             ~~--__  ~~~|~~~ {-1, 0, +1}
- |                        | ~~~~|~~~~
- |   FLUG-OS              |     |
- |   Fluid Operating Sys  |     |  ~~~~~~
- |   802.11 Packet-Wave   |     | ~~
- |   Sampler              |     |~
- |________________________|    ~~|~~
-      |                |    ~~~~ |
-      |  ESP8285       |   ~~~~~~|
-      |  Flipper Zero  | ~~~~
-      |  WiFi v1       |~~
-      |________________|
-
-     ~ 0.750 0.320 2 1 0.9231     ← packet RSSI density type domain kernel
-     ~ 0.4231 1 0.9231             ← synthesized wave domain kernel
-     🌊 {"ts":...,"rssi":-45,...} ← raw 802.11 frame JSON
++----------------------------------------------------------------------+
+|  _____ _     _   _  ____      ___  ____   FLUID OPERATING SYSTEM     |
+| |  ___| |   | | | |/ ___|    / _ \/ ___|  ----------------------     |
+| | |_  | |   | | | | |  _    | | | \___ \  802.11 PACKET-WAVE SAMPLER |
+| |  _| | |___| |_| | |_| |   | |_| |___) | ESP8285 SAMPLER BOARD      |
+| |_|   |_____|\___/ \____|    \___/|____/  FLIPPER ZERO WIFI v1       |
++----------------------------------------------------------------------+
+|  [ 2.4GHz SPECTRUM ANALYZER WAVE ]         [ FLIPPER CYBER-DOLPHIN ] |
+|  dBm                                              ( ( ( RF ) ) )     |
+|  -30|        /\                 /\                    /\             |
+|  -40|       /  \    /\         /  \                  /  \   __       |
+|  -50|   /\ /    \  /  \  /\   /    \/\              /  /   |[o ]\__  |
+|  -60|  /  #      \/    \/  # /      \ \____________/  /====|====/  \ |
+|  -70| /  / \     /\    /\ / /        \              /      '--'    \ |
+|  -80|_/_/   \___/  \__/  /_/          \____________/        __\/\_/  |
+|  2412MHz--------------------------------------------------> 2484MHz  |
+|  CH: 01 02 03 04 05 06 07 08 09 10 11 12 13 14              \__/     |
+|  WAV: ~~~^~~~v~~~^~~~^~~~v~~~^~~~v~~~^~~~v~~~^~~~v~~~~~~~~~~~~~~~~~  |
++----------------------------------------------------------------------+
+|  PACKET TYPES : [BEACON] [PROBE-REQ] [DATA-ACK] [EAPOL] [DEAUTH]     |
+|  SAMPLING     : Promiscuous IQ Waveform Captures @ 802.11b/g/n       |
++----------------------------------------------------------------------+
+|  TARGET BOARD : Flipper Zero WiFi Devboard v1 (ESP8285)              |
+|  SYSTEM CORE  : FLUG-OS Real-Time Kernel + Wave Engine v0.3.0        |
+|  SIGNING      : ML-DSA-65 + SLH-DSA post-quantum (NIST FIPS 204/205) |
++----------------------------------------------------------------------+
 
 
 **FLUG-OS{-1,0,+1}** — Fluid Operating System for the **Flipper Zero WiFi Module v1** (ESP8285).
@@ -61,14 +67,20 @@ pio run -e esp8285 -t upload
 ### 3. Connect
 
 ```bash
-# Find port
+# Find your serial port
 ls /dev/tty.*
-# macOS: /dev/tty.usbserial-XXXX
-# Linux: /dev/ttyUSB0
+# macOS: /dev/tty.usbserial-XXXX  or  /dev/tty.wchusbserial*
+# Linux: /dev/ttyUSB0  or  /dev/ttyACM0
+# Windows: COM3 or similar
 
-# Listen
+# Listen (macOS/Linux)
 screen /dev/tty.usbserial-XXXX 115200
 ```
+
+> **WiFi Module v1**: the ESP8285 module connects via UART through the
+> Flipper Zero's USB-C. FLUG-OS talks directly to the ESP8285's serial
+> console at 115200 baud. No Flipper Zero application needed — the
+> firmware runs standalone on the ESP8285 itself.
 
 ### 4. Start sniffing
 
@@ -86,6 +98,100 @@ stats             # packet counts
 pip3 install pyserial
 python3 bridge/wave_bridge.py /dev/tty.usbserial-XXXX --mode wave --dump
 ```
+
+---
+
+## WiFi Module v1 setup guide
+
+The Flipper Zero WiFi Module v1 uses an **ESP8285** (ESP8266 family) with 1MB flash.
+It connects to your computer through the Flipper Zero's USB-C port and communicates
+over UART at 115200 baud.
+
+### Identifying your module
+
+| Revision | Chip | Flash | Board ID |
+|----------|------|-------|----------|
+| **v1** (black PCB) | ESP8285 | 1MB | `esp8285` |
+| **v2** (white PCB) | ESP32-S2 | 4MB | `esp32-s2` |
+
+FLUG-OS targets the **v1 module (ESP8285)**. For v2 with ESP32-S2 a separate
+build target is planned.
+
+### Physical connection
+
+The WiFi Module v1 does **not** have its own USB port. It is powered and
+communicated with through the Flipper Zero's USB-C connector. When you
+plug the Flipper Zero into your computer via USB, the ESP8285 appears as
+a serial device:
+
+```
+  Flipper Zero (USB-C)  --- cable --->  WiFi Module v1 (ESP8285)
+  /dev/tty.usbserial-XXXX                UART @ 115200 baud
+```
+
+### Flashing via Flipper Zero (recommended)
+
+1. Connect the WiFi Module to the Flipper Zero (16-pin GPIO header)
+2. Connect the Flipper Zero to your computer via USB-C
+3. Put the Flipper in DFU mode: hold **LEFT + BACK** on boot
+4. Flash:
+   ```bash
+   pio run -e esp8285 -t upload
+   ```
+   PlatformIO auto-detects the ESP8285 through the Flipper's serial bridge.
+
+### Flashing directly (FTDI adapter)
+
+If you have a USB-UART (FTDI) adapter:
+
+```
+FTDI -> ESP8285
+GND  -> GND (pin 9)
+TX   -> RX  (pin 8)
+RX   -> TX  (pin 7)
+3.3V -> 3.3V(pin 1)
+IO0  -> GND (for flash mode, remove after)
+```
+
+```bash
+pio run -e esp8285 -t upload --upload-port /dev/tty.usbserial-XXXX
+```
+
+After flashing, remove the IO0->GND jumper and reset the module.
+
+### Serial console
+
+Connect to see the FLUG-OS boot screen:
+
+```bash
+screen /dev/tty.usbserial-XXXX 115200
+```
+
+Expected output:
+
+```
+  =============================================
+        FLUG-OS  {-1, 0, +1}
+    Fluid Operating System v0.3.0+dev
+  =============================================
+  ...
+```
+
+### No Flipper Zero?
+
+FLUG-OS runs on **any ESP8266/ESP8285 board**. Edit `platformio.ini`:
+
+```ini
+board = nodemcuv2        # NodeMCU v2, Wemos D1 Mini, etc.
+```
+
+Build and upload:
+
+```bash
+pio run -e generic -t upload
+```
+
+UART output will be on the board's built-in USB serial (`/dev/ttyUSB0`).
 
 ---
 
