@@ -28,7 +28,7 @@ typedef enum {
 
 static WaveMode wave_mode = MODE_RAW;
 static unsigned long last_density_reset = 0;
-static uint16_t packet_count = 0;  // rolls over at 65535, safe for density
+static uint16_t packet_count = 0;
 
 static void set_wave_mode(const char* mode) {
     if (!mode) return;
@@ -77,24 +77,20 @@ static void output_wave(int8_t rssi, int type, int subtype, unsigned long ts) {
 
     switch (wave_mode) {
         case MODE_RAW:
-            Serial.printf("%.3f %.3f %d\n", rssi_norm, density, type);
+            Serial.printf("~ %.3f %.3f %d\n", rssi_norm, density, type);
             break;
 
         case MODE_WAVE:
             {
-                // Normalized time within a 10s cycle
                 float t = (float)(ts % 10000) / 10000.0f;
-                // Phase from frame type/subtype for variety
                 float phase = (float)(type * 100 + subtype * 10);
-                // Sine wave: amplitude = RSSI, frequency = frame type, phase = type
-                // freq/440 normalizes to A4 = 1.0
                 float wave = sinf(2.0f * PI * (freq / 440.0f) * t + phase) * rssi_norm;
-                Serial.printf("%.4f\n", wave);
+                Serial.printf("~ %.4f\n", wave);
             }
             break;
 
         case MODE_JSON:
-            Serial.printf("{\"rssi\":%.3f,\"density\":%.3f,\"freq\":%.2f,"
+            Serial.printf("~ {\"rssi\":%.3f,\"density\":%.3f,\"freq\":%.2f,"
                           "\"type\":%d,\"subtype\":%d,\"ts\":%lu}\n",
                           rssi_norm, density, freq, type, subtype, ts);
             break;

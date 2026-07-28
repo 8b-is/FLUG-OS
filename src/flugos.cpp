@@ -11,7 +11,6 @@
 
 #include <ESP8266WiFi.h>
 #include "wave_output.h"
-#include <string.h>
 
 // ============================================================
 // Configuration
@@ -169,6 +168,7 @@ static void promisc_cb(uint8_t* buf, uint16_t len) {
         while (offset + 2 <= len) {
             uint8_t tag = buf[offset];
             uint8_t tag_len = buf[offset + 1];
+            if (tag_len > 50) break;  // malformed guard
             if (offset + 2 + tag_len > len) break;
             if (tag == 0 && tag_len > 0 && tag_len <= MAX_SSID_LEN) {
                 memcpy(ssid, &buf[offset + 2], tag_len);
@@ -191,7 +191,7 @@ static void promisc_cb(uint8_t* buf, uint16_t len) {
     // JSON output
     char out[OUTPUT_BUF_LEN];
     int n = snprintf(out, sizeof(out),
-        "{\"ts\":%lu,\"len\":%u,\"rssi\":%d,"
+        "🌊 {\"ts\":%lu,\"len\":%u,\"rssi\":%d,"
         "\"type\":\"%s\",\"subtype\":\"%s\","
         "\"src\":\"%s\",\"dst\":\"%s\",\"bssid\":\"%s\","
         "\"chan\":%d",
@@ -269,7 +269,30 @@ void setup() {
     Serial.begin(UART_BAUD);
     delay(200);
 
-    Serial.printf("{\"boot\":\"FLUG-OS\",\"ver\":\"0.2.0\",\"ternary\":\"{-1,0,+1}\"}\n");
+    // Pure ASCII boot screen — Flipper dolphin, ternary creed
+    Serial.printf("\r\n");
+    Serial.printf("  ╔══════════════════════════════════════╗\r\n");
+    Serial.printf("  ║        FLUG-OS  {-1, 0, +1}         ║\r\n");
+    Serial.printf("  ║    Fluid Operating System v0.2.0     ║\r\n");
+    Serial.printf("  ╚══════════════════════════════════════╝\r\n");
+    Serial.printf("\r\n");
+    Serial.printf("          _ __    ___   _ __  ___\r\n");
+    Serial.printf("         | '_ \\  / _ \\ | '_ \\/ __|   🜂\r\n");
+    Serial.printf("         | | | || (_) || | | \\__ \\  {-1,0,+1}\r\n");
+    Serial.printf("         |_| |_| \\___/ |_| |_|___/  ternary\r\n");
+    Serial.printf("\r\n");
+    Serial.printf("  ╔══════════════════════════════════════╗\r\n");
+    Serial.printf("  ║  ~( 802.11 packet-wave sampler )~   ║\r\n");
+    Serial.printf("  ║  RSSI → amplitude · type → freq     ║\r\n");
+    Serial.printf("  ║  Every packet is a note              ║\r\n");
+    Serial.printf("  ╚══════════════════════════════════════╝\r\n");
+    Serial.printf("\r\n");
+    Serial.printf("      .-～～～-.\r\n");
+    Serial.printf("     /  🜂  🜂  \\     8b-is constellation\r\n");
+    Serial.printf("    |  {-1,0,+1} |     ternary by design\r\n");
+    Serial.printf("     \\  ~~~~~  /\r\n");
+    Serial.printf("      `-_____-'\r\n");
+    Serial.printf("\r\n");
 
     wifi_set_opmode(STATION_MODE);
     wifi_set_channel(current_channel);
@@ -279,9 +302,10 @@ void setup() {
     wifi_promiscuous_enable(1);
     wifi_promiscuous_set_filter(WIFI_PKT_MGMT | WIFI_PKT_CTRL | WIFI_PKT_DATA);
 
-    Serial.printf("{\"ready\":true,\"ch\":%d,"
-                  "\"cmds\":\"ch <n> | hop | mode raw|wave|json | filter mgmt|data|ctrl|all | stats | reset\"}\n",
-                  current_channel);
+    Serial.printf("  ║  ch <n> · hop · mode raw|wave|json  ║\r\n");
+    Serial.printf("  ║  filter mgmt|data|ctrl|all · stats  ║\r\n");
+    Serial.printf("  ╚══════════════════════════════════════╝\r\n");
+    Serial.printf("\r\n");
 
     last_hop = millis();
     last_stats = millis();

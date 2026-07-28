@@ -224,6 +224,16 @@ def main():
                 if not text:
                     continue
 
+                # Strip ASCII/emoji prefix (~ or 🌊)
+                if text.startswith("~ "):
+                    text = text[2:]
+                elif text.startswith("🌊 "):
+                    text = text[2:]
+                elif text.startswith("{"):
+                    pass  # raw JSON, no prefix
+                else:
+                    continue  # boot message or other noise
+
                 parsed = parser_fn(text)
                 if not parsed:
                     continue
