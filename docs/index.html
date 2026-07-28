@@ -4,95 +4,209 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>FLUG-OS {-1, 0, +1} — 802.11 Packet-Wave Sampler</title>
-  <meta name="description" content="FLUG-OS: Fluid Operating System for the Flipper Zero WiFi Module v1. Captures 802.11 frames as raw wave data for generative music.">
+  <meta name="description" content="FLUG-OS: Fluid Operating System for the Flipper Zero WiFi Module. Captures 802.11 frames as raw wave data through the universal sine kernel. Post-quantum signed.">
   <meta property="og:title" content="FLUG-OS {-1, 0, +1}">
-  <meta property="og:description" content="802.11 packet-wave sampler for Flipper Zero. RSSI → amplitude. Frame type → frequency. Density → rhythm.">
+  <meta property="og:description" content="802.11 packet-wave sampler for Flipper Zero. RSSI → amplitude. Frame type → frequency. Sine kernel → universal threshold.">
   <meta property="og:url" content="https://8b-is.github.io/FLUG-OS/">
+  <meta property="og:image" content="https://8b-is.github.io/FLUG-OS/hero.svg">
   <meta name="twitter:card" content="summary_large_image">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #070B16; color: #E0E8F5; font-family: 'JetBrains Mono', monospace; line-height: 1.6; }
-    .container { max-width: 800px; margin: 0 auto; padding: 40px 20px; }
-    h1 { font-size: 2.5em; margin-bottom: 8px; background: linear-gradient(135deg, #00D4FF, #8B5CF6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-    .subtitle { color: #6878A0; font-size: 0.9em; margin-bottom: 40px; }
-    .tag {-1, 0, +1} { color: #00D4FF; font-size: 1.2em; }
-    h2 { color: #00D4FF; font-size: 1.1em; margin: 32px 0 12px; }
-    p, li { color: #A0A8C0; font-size: 0.9em; line-height: 1.7; }
+    body { background: #070B16; color: #E0E8F5; font-family: 'Courier New', monospace; line-height: 1.6; }
+    .container { max-width: 860px; margin: 0 auto; padding: 40px 20px; }
+
+    .hero { text-align: center; padding: 60px 0 40px; border-bottom: 1px solid #26304A; margin-bottom: 40px; }
+    .hero pre { color: #00D4FF; font-size: 14px; line-height: 1.3; margin-bottom: 24px; }
+    .hero h1 { font-size: 2.8em; background: linear-gradient(135deg, #00D4FF, #8B5CF6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 8px; }
+    .hero .subtitle { color: #6878A0; font-size: 0.9em; }
+    .hero .ternary { color: #8B5CF6; font-size: 1.4em; margin: 8px 0; }
+    .hero .tags { margin-top: 20px; }
+    .hero .tags span { display: inline-block; padding: 4px 12px; border-radius: 12px; font-size: 0.75em; margin: 0 4px 8px; border: 1px solid; }
+    .tag-esp { background: #00E66011; color: #00E660; border-color: #00E66044; }
+    .tag-pqc { background: #8B5CF611; color: #8B5CF6; border-color: #8B5CF644; }
+    .tag-ternary { background: #00D4FF11; color: #00D4FF; border-color: #00D4FF44; }
+    .tag-flipper { background: #FFB02011; color: #FFB020; border-color: #FFB02044; }
+
+    .btn { display: inline-block; padding: 12px 28px; border-radius: 8px; font-size: 0.9em; text-decoration: none; font-weight: 600; margin: 4px; }
+    .btn-primary { background: #00D4FF; color: #070B16; }
+    .btn-primary:hover { background: #00E8FF; }
+    .btn-secondary { background: transparent; color: #E0E8F5; border: 1px solid #6878A0; }
+    .btn-secondary:hover { border-color: #00D4FF; color: #00D4FF; }
+    .btn-actions { margin-top: 20px; }
+
+    h2 { color: #00D4FF; font-size: 1em; margin: 32px 0 12px; text-transform: uppercase; letter-spacing: 1px; }
+    p { color: #A0A8C0; font-size: 0.9em; max-width: 640px; }
     a { color: #8B5CF6; text-decoration: none; }
     a:hover { color: #00D4FF; }
     code { background: #0A0A14; padding: 2px 6px; border-radius: 3px; font-size: 0.85em; color: #00E660; }
-    pre { background: #0A0A14; padding: 16px; border-radius: 8px; overflow-x: auto; margin: 12px 0; border: 1px solid #26304A; }
+    pre { background: #0A0A14; padding: 16px; border-radius: 8px; overflow-x: auto; margin: 12px 0; border: 1px solid #26304A; font-size: 0.85em; }
     .cmd { color: #FFB020; }
-    ul { padding-left: 20px; }
-    li { margin-bottom: 6px; }
-    .badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 0.75em; font-weight: 600; margin-right: 6px; }
-    .badge-green { background: #00E66022; color: #00E660; border: 1px solid #00E66044; }
-    .badge-blue { background: #00D4FF22; color: #00D4FF; border: 1px solid #00D4FF44; }
-    .badge-purple { background: #8B5CF622; color: #8B5CF6; border: 1px solid #8B5CF644; }
-    hr { border: none; border-top: 1px solid #26304A; margin: 40px 0; }
-    .footer { color: #6878A0; font-size: 0.8em; text-align: center; margin-top: 60px; }
+    .comment { color: #6878A0; }
+
+    .steps { counter-reset: step; list-style: none; padding: 0; }
+    .steps li { counter-increment: step; margin-bottom: 24px; padding-left: 40px; position: relative; }
+    .steps li::before { content: counter(step); position: absolute; left: 0; top: 0; background: #00D4FF22; color: #00D4FF; width: 28px; height: 28px; border-radius: 50%; text-align: center; line-height: 28px; font-size: 0.8em; font-weight: 600; border: 1px solid #00D4FF44; }
+
+    table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 0.85em; }
+    th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #26304A; color: #A0A8C0; }
+    th { color: #00D4FF; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; font-size: 0.75em; }
+
+    .specs { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin: 16px 0; }
+    .spec { background: #0A0A14; padding: 16px; border-radius: 8px; border: 1px solid #26304A; text-align: center; }
+    .spec .val { font-size: 1.8em; font-weight: 700; color: #00D4FF; display: block; }
+    .spec .lbl { font-size: 0.75em; color: #6878A0; text-transform: uppercase; letter-spacing: 0.5px; }
+
+    .footer { text-align: center; padding: 40px 0; color: #6878A0; font-size: 0.8em; border-top: 1px solid #26304A; margin-top: 40px; }
+    .footer a { color: #6878A0; }
+    .footer a:hover { color: #00D4FF; }
   </style>
 </head>
 <body>
-  <div class="container">
-    <h1>FLUG-OS {-1, 0, +1}</h1>
-    <p class="subtitle">Fluid Operating System for the Flipper Zero WiFi Module v1<br>
-    802.11 Packet-Wave Sampler · RSSI → Amplitude · Frame Type → Frequency</p>
+<div class="container">
 
-    <p>
-      <span class="badge badge-green">ESP8285</span>
-      <span class="badge badge-blue">Flipper Zero</span>
-      <span class="badge badge-purple">{-1, 0, +1}</span>
-      <span class="badge badge-green">promiscuous mode</span>
-    </p>
-
-    <h2>What it does</h2>
-    <p>Turns your Flipper Zero WiFi Module into a raw 802.11 wave sampler.
-    Every WiFi packet becomes a musical note. RSSI becomes amplitude.
-    Frame type determines frequency. Packet density drives rhythm.</p>
-    <p>Piped into <strong>music.vaked.dev</strong>, the ambient WiFi spectrum becomes
-    generative music — the invisible made audible.</p>
-
-    <h2>Wave output modes</h2>
-    <pre><span class="cmd">mode raw</span>   → "0.750 0.320 0"     RSSI density type
-<span class="cmd">mode wave</span>  → "0.4231"             synthesized sinusoid
-<span class="cmd">mode json</span>  → {"rssi","freq"...}  structured musical JSON</pre>
-
-    <h2>Commands</h2>
-    <pre><span class="cmd">ch 6</span>           Set channel 1-13
-<span class="cmd">hop</span>           Channel hopping
-<span class="cmd">mode raw|wave|json</span>  Wave output mode
-<span class="cmd">filter mgmt|data|ctrl|all</span>  Frame type filter
-<span class="cmd">stats</span>         Capture statistics
-<span class="cmd">reset</span>         Reset counters</pre>
-
-    <h2>Flash it</h2>
-    <pre>git clone https://github.com/8b-is/FLUG-OS.git
-cd FLUG-OS
-pio run -e esp8285 -t upload</pre>
-
-    <h2>Listen</h2>
-    <pre>python3 bridge/wave_bridge.py /dev/tty.usbserial-XXXX \
-  --mode wave --dump | play -t raw -r 44100 -e float -b 32 -</pre>
-
-    <h2>Architecture</h2>
-    <pre>802.11 spectrum → ESP8285 → UART → bridge → music.vaked.dev
-     ↕                                   ↕
-  ambient packets                   generated audio</pre>
-
-    <h2>Ecosystem</h2>
-    <p>FLUG-OS is part of the <strong>8b-is constellation</strong>:</p>
-    <ul>
-      <li><a href="https://github.com/8b-is/hf-mac">HF-MAC{-1,0,+1}</a> — macOS Hugging Face client</li>
-      <li><a href="https://github.com/entropy-om/entheai">entheai</a> — agent with MEM8 wave memory</li>
-      <li><a href="https://github.com/8b-is/ayeos">ayeOS</a> — ternary inference daemon</li>
-      <li><a href="https://github.com/8b-is/MLX-QUANT">MLX-QUANT</a> — Metal GPU ternary kernels</li>
-      <li><a href="https://github.com/8b-is/FLUG-OS">FLUG-OS</a> — this</li>
-    </ul>
-    <p>All ternary. All aligned. {-1, 0, +1}</p>
-
-    <hr>
-    <p class="footer">Built by the 8b-is constellation. 🜂 {-1, 0, +1} — ennyi elég.</p>
+  <!-- Hero -->
+  <div class="hero">
+    <pre>
+                          ___
+                    ~~~~~|~~~ FLUG-OS
+              ___--~~~~~---__    ~~~~~ |
+        ___--~~             ~~--__  ~~~|~~~ {-1, 0, +1}
+       |                        | ~~~~|~~~~
+       |  FLUG-OS               |     |
+       |  Fluid Operating Sys   |     |  ~~~~~~
+       |  802.11 Packet-Wave    |     | ~~
+       |  Sampler               |     |~
+       |________________________|    ~~|~~
+            |                |    ~~~~ |
+            |  ESP8285       |   ~~~~~~|
+            |  Flipper Zero  | ~~~~
+            |  WiFi v1       |~~
+            |________________|</pre>
+    <h1>FLUG-OS{-1,0,+1}</h1>
+    <div class="ternary">Fluid Operating System</div>
+    <p class="subtitle">802.11 packet-wave sampler for the Flipper Zero WiFi Module<br>
+    RSSI → amplitude · Frame type → frequency · Sine kernel → universal threshold</p>
+    <div class="tags">
+      <span class="tag-esp">ESP8285</span>
+      <span class="tag-flipper">Flipper Zero</span>
+      <span class="tag-ternary">{-1, 0, +1}</span>
+      <span class="tag-pqc">ML-DSA signed</span>
+    </div>
+    <div class="btn-actions">
+      <a href="https://github.com/8b-is/FLUG-OS" class="btn btn-primary">GitHub</a>
+      <a href="https://github.com/8b-is/FLUG-OS/releases" class="btn btn-secondary">Download firmware</a>
+      <a href="#install" class="btn btn-secondary">Install</a>
+    </div>
   </div>
+
+  <!-- Specs -->
+  <div class="specs">
+    <div class="spec">
+      <span class="val">ESP8285</span>
+      <span class="lbl">SoC</span>
+    </div>
+    <div class="spec">
+      <span class="val">2.4 GHz</span>
+      <span class="lbl">Frequency</span>
+    </div>
+    <div class="spec">
+      <span class="val">Ch 1–13</span>
+      <span class="lbl">Channels</span>
+    </div>
+  </div>
+
+  <!-- What -->
+  <h2>What it does</h2>
+  <p>Turns your Flipper Zero WiFi Module into a raw 802.11 wave sampler.
+  Every WiFi packet becomes a musical note through the universal sine kernel
+  K(u)=sin(πu)/(πu). RSSI becomes amplitude. Frame type becomes frequency.
+  Packet density drives the threshold domain: {-1, below critical | 0, at critical | +1, above}.</p>
+  <p>Aligned with <a href="https://axiomquant.org"><strong>axiomquant.org</strong></a> — five threshold domains sharing the same phase transition structure:
+  Erdős graph β₁, BitNet ternary γ, Markowitz λ, Black-Scholes σ, Rényi dyadic β.</p>
+
+  <!-- Install -->
+  <h2 id="install">Install in 2 minutes</h2>
+  <ol class="steps">
+    <li>
+      <strong>Install PlatformIO</strong><br>
+      <code>pip3 install platformio</code>
+    </li>
+    <li>
+      <strong>Clone &amp; build</strong><br>
+      <pre>git clone https://github.com/8b-is/FLUG-OS.git
+cd FLUG-OS
+pio run -e esp8285</pre>
+    </li>
+    <li>
+      <strong>Connect Flipper Zero via USB</strong><br>
+      <span style="color:#6878A0;font-size:0.85em;">Flipper must be in QFlipper mode or connected directly</span>
+    </li>
+    <li>
+      <strong>Upload</strong><br>
+      <pre>pio run -e esp8285 -t upload</pre>
+    </li>
+    <li>
+      <strong>Listen</strong><br>
+      <pre>screen /dev/tty.usbserial-XXXX 115200</pre>
+    </li>
+    <li>
+      <strong>Start sniffing</strong><br>
+      <pre><span class="cmd">mode wave</span>      <span class="comment"># hear the spectrum</span>
+<span class="cmd">ch 6</span>            <span class="comment"># set channel</span>
+<span class="cmd">hop</span>             <span class="comment"># sweep all channels</span></pre>
+    </li>
+  </ol>
+
+  <!-- Commands -->
+  <h2>Commands</h2>
+  <table>
+    <tr><th>Command</th><th>What it does</th></tr>
+    <tr><td><code>ch 6</code></td><td>Set channel (1–13)</td></tr>
+    <tr><td><code>hop</code></td><td>Toggle channel hopping (1s per channel)</td></tr>
+    <tr><td><code>mode raw</code></td><td>RSSI density type domain kernel — 5 floats</td></tr>
+    <tr><td><code>mode wave</code></td><td>Synthesized sine wave sample</td></tr>
+    <tr><td><code>mode json</code></td><td>Structured JSON with musical parameters</td></tr>
+    <tr><td><code>filter mgmt</code></td><td>Show only management frames</td></tr>
+    <tr><td><code>filter data</code></td><td>Show only data frames</td></tr>
+    <tr><td><code>filter all</code></td><td>Show everything (default)</td></tr>
+    <tr><td><code>stats</code></td><td>Capture statistics</td></tr>
+    <tr><td><code>reset</code></td><td>Reset counters</td></tr>
+  </table>
+
+  <!-- Wave output -->
+  <h2>Wave output</h2>
+  <pre><span class="comment"># raw mode — 5 floats per packet</span>
+~ 0.750 0.320 2 1 0.9231
+
+<span class="comment"># wave mode — 3 floats per packet</span>
+~ 0.4231 1 0.9231
+
+<span class="comment"># json mode — structured</span>
+~ {"rssi":0.750,"density":0.320,"domain":1,"kernel":0.9231}</pre>
+
+  <!-- Ecosystem -->
+  <h2>Ecosystem</h2>
+  <p>Part of the <strong>8b-is constellation</strong>:</p>
+  <table>
+    <tr><th>Node</th><th>Layer</th></tr>
+    <tr><td><a href="https://github.com/8b-is/hf-mac">HF-MAC{-1,0,+1}</a></td><td>Native macOS Hugging Face client</td></tr>
+    <tr><td><a href="https://github.com/entropy-om/entheai">entheai</a></td><td>Agent with MEM8 wave memory</td></tr>
+    <tr><td><a href="https://github.com/8b-is/ayeos">ayeOS</a></td><td>Ternary matrix inference daemon</td></tr>
+    <tr><td><a href="https://github.com/8b-is/MLX-QUANT">MLX-QUANT</a></td><td>Metal GPU ternary kernels</td></tr>
+    <tr><td><strong>FLUG-OS</strong></td><td>802.11 packet-wave sampler</td></tr>
+  </table>
+
+  <!-- Security -->
+  <h2>Post-quantum security</h2>
+  <p>Firmware releases are dual-signed with <strong>ML-DSA-65</strong> (FIPS 204, Dilithium) and
+  <strong>SLH-DSA</strong> (FIPS 205, SPHINCS+) per NIST standards finalized August 13, 2024.
+  <a href="https://security.googleblog.com/2024/08/post-quantum-cryptography-standards.html">Reference →</a></p>
+
+  <div class="footer">
+    <p>Built by the 8b-is constellation. 🜂 {-1, 0, +1} — ennyi elég.</p>
+    <p><a href="https://github.com/8b-is/FLUG-OS">GitHub</a> · <a href="https://github.com/8b-is/FLUG-OS/releases">Releases</a> · <a href="https://axiomquant.org">axiomquant.org</a></p>
+  </div>
+
+</div>
 </body>
 </html>

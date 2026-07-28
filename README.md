@@ -1,169 +1,168 @@
-# FLUG-OS {-1, 0, +1}
 
-**F**luid **O**perating **S**ystem for the Flipper Zero WiFi Module v1.
+                                   ___
+                             ~~~~~|~~~ FLUG-OS
+        ___--~~~~~---__    ~~~~~ | ~~~
+  ___--~~             ~~--__  ~~~|~~~ {-1, 0, +1}
+ |                        | ~~~~|~~~~
+ |   FLUG-OS              |     |
+ |   Fluid Operating Sys  |     |  ~~~~~~
+ |   802.11 Packet-Wave   |     | ~~
+ |   Sampler              |     |~
+ |________________________|    ~~|~~
+      |                |    ~~~~ |
+      |  ESP8285       |   ~~~~~~|
+      |  Flipper Zero  | ~~~~
+      |  WiFi v1       |~~
+      |________________|
 
-Turns your Flipper Zero into a raw 802.11 packet-wave sampler. Captures WiFi frames in promiscuous mode, streams packet features as numerical wave data — RSSI becomes amplitude, frame types become frequency, packet density becomes rhythm. Pipe it into generative music, signal analysis, or just watch the invisible spectrum become visible.
+     ~ 0.750 0.320 2 1 0.9231     ← packet RSSI density type domain kernel
+     ~ 0.4231 1 0.9231             ← synthesized wave domain kernel
+     🌊 {"ts":...,"rssi":-45,...} ← raw 802.11 frame JSON
 
-```
-FLUG-OS on ESP8285    →    UART    →    Python bridge    →    music.vaked.dev
-                                      your ears
-                                      MIDI synth
-                                      any HTTP endpoint
-```
 
-Part of the 8b-is stack. Ternary by design. {-1, 0, +1}
+**FLUG-OS{-1,0,+1}** — Fluid Operating System for the **Flipper Zero WiFi Module v1** (ESP8285).
+Captures 802.11 frames in promiscuous mode, streams packet features as numerical wave data
+through the universal sine kernel K(u)=sin(πu)/(πu). Every WiFi packet becomes a musical note,
+a ternary matrix row, or a spectral analysis point.
+
+Aligned with **axiomquant.org** — five threshold domains:
+Erdős β₁ · BitNet ternary γ · Markowitz λ · Black-Scholes σ · Rényi dyadic β.
+
+Signed with **ML-DSA-65 + SLH-DSA** post-quantum signatures (NIST FIPS 203/204/205).
 
 ---
 
-## Quick Start
+## Quick start — 3 minutes
 
 ### 1. What you need
 
-- **Flipper Zero** with a **WiFi Module v1** (ESP8285-based, black PCB)
-- **USB-C cable** to connect Flipper to your computer
-- **PlatformIO** (or Arduino IDE with ESP8266 core)
-
-### 2. Flash the firmware
-
-```bash
-# Clone
-git clone https://github.com/8b-is/FLUG-OS.git
-cd FLUG-OS
-
-# Build & upload (Flipper must be in QFlipper mode or connected via USB)
-pio run -e esp8285 -t upload
-
-# Or build the binary and flash manually
-pio run -e esp8285
+```
+[ ] Flipper Zero
+[ ] WiFi Module v1 (ESP8285, black PCB)
+[ ] USB-C cable
+[ ] Computer with Python 3
 ```
 
-> **No Flipper?** You can flash any ESP8285/ESP8266 board (NodeMCU, Wemos D1, etc.)
-> with the same firmware. Change `board = esp8285` to `board = nodemcuv2` in platformio.ini.
+### 2. Flash
+
+```bash
+# Install PlatformIO (one time)
+pip3 install platformio
+
+# Clone & build
+git clone https://github.com/8b-is/FLUG-OS.git
+cd FLUG-OS
+pio run -e esp8285 -t upload
+```
+
+> **No Flipper?** FLUG-OS runs on any ESP8266. Edit `platformio.ini`:
+> change `board = esp8285` to `board = nodemcuv2` for NodeMCU, Wemos D1, etc.
 
 ### 3. Connect
 
 ```bash
-# Find your serial port
+# Find port
 ls /dev/tty.*
-# Typical: /dev/tty.usbserial-XXXX (macOS) or /dev/ttyUSB0 (Linux)
+# macOS: /dev/tty.usbserial-XXXX
+# Linux: /dev/ttyUSB0
 
-# Open serial monitor
-pio device monitor --port /dev/tty.usbserial-XXXX --baud 115200
-
-# Or use screen/tmux
+# Listen
 screen /dev/tty.usbserial-XXXX 115200
 ```
 
-You should see JSON lines streaming in — each line is a captured WiFi frame.
+### 4. Start sniffing
 
-### 4. Wave bridge (optional — for music generation)
+```
+mode wave          # hear the spectrum as sine waves
+ch 6              # listen on channel 6
+hop               # sweep all channels
+filter mgmt       # only management frames
+stats             # packet counts
+```
+
+### 5. Pipe to music
 
 ```bash
-# Install deps
 pip3 install pyserial
-
-# Stream raw wave data to terminal
 python3 bridge/wave_bridge.py /dev/tty.usbserial-XXXX --mode wave --dump
-
-# Pipe to music.vaked.dev (or any HTTP endpoint)
-python3 bridge/wave_bridge.py /dev/tty.usbserial-XXXX --mode json --http https://music.vaked.dev/wave
 ```
 
 ---
 
 ## Commands
 
-Send commands over serial. Every command returns JSON confirmation.
-
-| Command | What it does | Example |
-|---------|-------------|---------|
-| `ch <n>` | Set fixed channel 1–13 | `ch 6` — listen on WiFi channel 6 |
-| `hop` | Toggle channel hopping (1s per channel) | `hop` — sweeps all channels |
-| `mode raw` | Wave output: RSSI + density + type | `mode raw` — 3 floats per packet |
-| `mode wave` | Wave output: synthesized sinusoid | `mode wave` — audio waveform samples |
-| `mode json` | Wave output: structured musical JSON | `mode json` — for API integration |
-| `filter mgmt` | Show only management frames | `filter mgmt` — beacons, probes, deauths |
-| `filter data` | Show only data frames | `filter data` — actual network traffic |
-| `filter ctrl` | Show only control frames | `filter ctrl` — RTS, CTS, ACK |
-| `filter all` | Show everything | `filter all` — default |
-| `stats` | Show capture statistics | `stats` — packet counts per type |
-| `reset` | Reset all counters | `reset` — fresh stats |
+| Command | What it does |
+|---------|-------------|
+| `ch 6` | Set channel (1-13) |
+| `hop` | Toggle channel hopping (1s/ch) |
+| `mode raw` | RSSI density type domain kernel — 5 floats |
+| `mode wave` | Synthesized sine wave sample — 3 floats |
+| `mode json` | Structured JSON with musical parameters |
+| `filter mgmt|ctrl|data|all` | Filter by frame type |
+| `stats` | Show capture statistics |
+| `reset` | Reset counters |
 
 ---
 
-## Wave theory
+## Wave output formats
 
-FLUG-OS is aligned with the **axiomquant.org** universal threshold kernel.
-Every packet is evaluated through the sine kernel K(u) = sin(πu)/(πu).
+### raw mode — 5 floats per packet
 
-| Domain | Below critical | At critical | Above critical |
-|--------|---------------|-------------|----------------|
-| Erdős β₁ (graph) | Fragmented | Giant component | Connected |
-| **BitNet ternary γ** | Continuous | **Round to ±1** | **{-1,0,+1}** |
-| Markowitz λ | Zero weight | Enters | Dominates |
-| Black-Scholes σ | Deep OTM | ATM | Deep ITM |
-| Rényi dyadic β | Preserved | 1 bit/iter | Chaotic |
+```
+~ RSSI DENSITY FRAME_TYPE DOMAIN KERNEL
+~ 0.750 0.320 2 1 0.9231
+```
 
-FLUG-OS operates in the ternary regime. RSSI → {-1, 0, +1}. Domain tag (-1/0/+1) on every line.
+| Field | Range | Meaning |
+|-------|-------|---------|
+| RSSI | 0.0 — 1.0 | Normalized signal strength |
+| DENSITY | 0.0 — 1.0 | Packets per 100ms window |
+| FRAME_TYPE | 0, 1, 2 | mgmt, ctrl, data |
+| DOMAIN | -1, 0, +1 | Below/at/above critical threshold |
+| KERNEL | 0.0 — 1.0 | Sine kernel K(u)=sin(πu)/(πu) |
 
-https://axiomquant.org/
+### wave mode — 3 floats per packet
+
+```
+~ WAVE DOMAIN KERNEL
+~ 0.4231 1 0.9231
+```
+
+### json mode — structured musical data
+
+```
+~ {"rssi":0.750,"density":0.320,"freq":220.00,"type":0,"subtype":8,"domain":1,"kernel":0.9231,"ts":123456}
+```
+
+### default (no wave mode) — 802.11 frame JSON
+
+```
+🌊 {"ts":123456,"len":68,"rssi":-45,"type":"mgmt","subtype":"beacon","src":"aa:bb:cc:dd:ee:ff","dst":"...","bssid":"...","ssid":"MyNetwork","chan":6,"bi":100}
+```
 
 ---
 
-## Wave output explained
+## Ecosystem
 
-When you set `mode wave`, ambient WiFi traffic becomes a live audio data stream:
+| Node | What | Layer |
+|------|------|-------|
+| [**HF-MAC{-1,0,+1}**](https://github.com/8b-is/hf-mac) | Native macOS Hugging Face client | App |
+| [**entheai**](https://github.com/entropy-om/entheai) | Agent with MEM8 wave memory | Agent |
+| [**ayeOS**](https://github.com/8b-is/ayeos) | Ternary matrix inference daemon | Inference |
+| [**MLX-QUANT**](https://github.com/8b-is/MLX-QUANT) | Metal GPU ternary kernels | GPU |
+| [**FLUG-OS**](https://github.com/8b-is/FLUG-OS) | 802.11 packet-wave sampler | Hardware |
+| [**axiomquant.org**](https://axiomquant.org) | Universal threshold kernel research | Math |
 
-```
-Packet type → frequency     Beacon (220 Hz)  Deauth (415 Hz)  Data (523 Hz)
-RSSI        → amplitude     -30 dBm → 1.0    -80 dBm → 0.2    -50 dBm → 0.6
-Density     → rhythm        100 packets/s → dense   1 packet/s → sparse
-```
-
-The Python bridge converts these to MIDI notes, OSC messages, or HTTP payloads.
-Each packet is a note. The WiFi spectrum is the instrument. Your environment is the composer.
-
----
-
-## Output format
-
-**Default (JSON mode) — one line per frame:**
-```json
-{"ts":123456,"len":68,"rssi":-45,"type":"mgmt","subtype":"beacon","src":"aa:bb:cc:dd:ee:ff","dst":"ff:ff:ff:ff:ff:ff","bssid":"aa:bb:cc:dd:ee:ff","ssid":"MyNetwork","chan":6,"bi":100}
-```
-
-**Wave mode — one float per packet:**
-```
-0.4231
--0.1872
-0.8910
--0.5432
-```
-
-**Raw mode — three floats per packet:**
-```
-0.750 0.320 0
-0.210 0.010 2
-0.890 0.750 0
-```
-Columns: `rssi(0-1) density(0-1) frame_type(0=mgmt, 1=ctrl, 2=data)`
+All ternary. All aligned. {-1, 0, +1}
 
 ---
 
-## Build from source
+## Build
 
 ```bash
-# Install PlatformIO
-pip3 install platformio
-
-# Build for ESP8285 (Flipper Zero WiFi v1)
-pio run -e esp8285
-
-# Build for generic ESP8266 (NodeMCU, etc.)
-# Edit platformio.ini: change board = nodemcuv2
-
-# Upload
-pio run -e esp8285 -t upload
+pio run -e esp8285                    # Flipper Zero WiFi v1
+pio run -e generic                    # Generic ESP8266
+pio run -e debug                      # Debug build with serial output
 ```
 
 ### Files
@@ -171,32 +170,35 @@ pio run -e esp8285 -t upload
 ```
 FLUG-OS/
 ├── src/
-│   ├── flugos.cpp         # Main firmware (~450 lines)
-│   └── wave_output.h      # Wave sonification engine
+│   ├── flugos.cpp           # Main firmware (500 lines)
+│   ├── wave_output.h        # Sine kernel wave sonification
+│   ├── matrix_decoder.h     # 1:1 packet→ternary matrix decoder
+│   └── version.h            # Semantic versioning + CI commit
 ├── bridge/
-│   └── wave_bridge.py      # Python serial → HTTP bridge
-├── platformio.ini          # Build config
-└── README.md               # This file
+│   └── wave_bridge.py       # Serial → HTTP/MIDI wave bridge
+├── .github/workflows/
+│   └── ci.yml               # Blacksmith CI + PQC signing
+├── platformio.ini           # Build config
+└── README.md                # This file
 ```
 
----
+## Security
 
-## Ecosystem
+Firmware releases are signed with **post-quantum signatures**:
 
-FLUG-OS is one node in the **8b-is constellation**:
+| Algorithm | Standard | Purpose |
+|-----------|----------|---------|
+| ML-DSA-65 | FIPS 204 (CRYSTALS-Dilithium) | Primary firmware signature |
+| SLH-DSA-SHAKE-128s | FIPS 205 (SPHINCS+) | Backup signature |
 
-| Node | What | Layer |
-|------|------|-------|
-| **HF-MAC{-1,0,+1}** | Native macOS Hugging Face client | App |
-| **entheai** | Agent with MEM8 wave memory | Agent |
-| **ayeOS** | Ternary matrix inference daemon | Inference |
-| **MLX-QUANT** | Metal GPU ternary kernels | GPU |
-| **FLUG-OS** | Raw 802.11 packet-wave sampler | Hardware |
-| **music.vaked.dev** | Generative music from wave data | Audio |
+Public keys published with each release. Verify:
 
-All ternary. All aligned. {-1, 0, +1}
+```bash
+openssl dgst -verify flugos-signing-mldsa65.pub \
+  -signature firmware.bin.mldsa65.sig firmware.bin
+```
 
----
+Reference: [NIST FIPS 203/204/205 — August 13, 2024](https://security.googleblog.com/2024/08/post-quantum-cryptography-standards.html)
 
 ## License
 
