@@ -91,6 +91,25 @@ Send commands over serial. Every command returns JSON confirmation.
 
 ---
 
+## Wave theory
+
+FLUG-OS is aligned with the **axiomquant.org** universal threshold kernel.
+Every packet is evaluated through the sine kernel K(u) = sin(πu)/(πu).
+
+| Domain | Below critical | At critical | Above critical |
+|--------|---------------|-------------|----------------|
+| Erdős β₁ (graph) | Fragmented | Giant component | Connected |
+| **BitNet ternary γ** | Continuous | **Round to ±1** | **{-1,0,+1}** |
+| Markowitz λ | Zero weight | Enters | Dominates |
+| Black-Scholes σ | Deep OTM | ATM | Deep ITM |
+| Rényi dyadic β | Preserved | 1 bit/iter | Chaotic |
+
+FLUG-OS operates in the ternary regime. RSSI → {-1, 0, +1}. Domain tag (-1/0/+1) on every line.
+
+https://axiomquant.org/
+
+---
+
 ## Wave output explained
 
 When you set `mode wave`, ambient WiFi traffic becomes a live audio data stream:

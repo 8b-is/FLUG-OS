@@ -302,6 +302,10 @@ void setup() {
     wifi_promiscuous_enable(1);
     wifi_promiscuous_set_filter(WIFI_PKT_MGMT | WIFI_PKT_CTRL | WIFI_PKT_DATA);
 
+    Serial.printf("  ║  802.11 ⊗ sine kernel · axiomquant  ║\r\n");
+    Serial.printf("  ║  K(u)=sin(πu)/(πu) · 5 thresholds    ║\r\n");
+    Serial.printf("  ║  Erdős β₁ · BitNet γ · Markowitz λ   ║\r\n");
+    Serial.printf("  ║  Black-Scholes σ · Rényi dyadic β    ║\r\n");
     Serial.printf("  ║  ch <n> · hop · mode raw|wave|json  ║\r\n");
     Serial.printf("  ║  filter mgmt|data|ctrl|all · stats  ║\r\n");
     Serial.printf("  ╚══════════════════════════════════════╝\r\n");
