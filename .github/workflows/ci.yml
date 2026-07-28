@@ -1,0 +1,129 @@
+# FLUG-OS CI — Build + Test + Sign via Blacksmith Apple Silicon runner.
+#
+# Triggers:
+#   - Push to main (build + test)
+#   - Tag v* (build + test + sign + release)
+#   - Manual workflow_dispatch
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed for release
+  id-token: write   # needed for cosign (keyless signing)
+
+env:
+  FLUGOS_COMMIT: ${{ github.sha }}
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        env: [esp8285]
+    runs-on: blacksmith-6vcpu-macos-15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PlatformIO
+        run: |
+          pip3 install platformio
+          pio --version
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            .pio
+          key: ${{ runner.os }}-pio-${{ matrix.env }}-${{ hashFiles('platformio.ini') }}
+
+      - name: Build firmware
+        run: |
+          pio run -e ${{ matrix.env }}
+          echo "BUILD=build/.pio/build/${{ matrix.env }}" >> $GITHUB_ENV
+
+      - name: Rename artifact with version
+        run: |
+          VERSION="v$(grep FLUGOS_VERSION src/version.h | head -1 | cut -d'"' -f2)"
+          cp .pio/build/${{ matrix.env }}/firmware.bin flugos-${{ matrix.env }}-$VERSION.bin
+          cp .pio/build/${{ matrix.env }}/firmware.elf flugos-${{ matrix.env }}-$VERSION.elf 2>/dev/null || true
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flugos-${{ matrix.env }}-${{ github.sha }}
+          path: |
+            flugos-*.bin
+            flugos-*.elf
+
+  sign:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build]
+    runs-on: blacksmith-6vcpu-macos-15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download built firmware
+        uses: actions/download-artifact@v4
+        with:
+          pattern: flugos-*
+          merge-multiple: true
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Generate SHA256 manifest
+        run: |
+          shasum -a 256 flugos-*.bin flugos-*.elf 2>/dev/null | tee flugos-sha256.txt
+
+      - name: Sign firmware with cosign (keyless)
+        run: |
+          for f in flugos-*.bin flugos-*.elf; do
+            [ -f "$f" ] || continue
+            cosign sign-blob "$f" \
+              --signature "${f}.sig" \
+              --output-certificate "${f}.pem" \
+              --yes
+            echo "Signed: $f"
+          done
+
+      - name: Sign SHA256 manifest
+        run: |
+          cosign sign-blob flugos-sha256.txt \
+            --signature flugos-sha256.txt.sig \
+            --output-certificate flugos-sha256.txt.pem \
+            --yes
+
+      - name: Verify signatures
+        run: |
+          for f in flugos-*.bin flugos-*.elf; do
+            [ -f "$f" ] || continue
+            cosign verify-blob "$f" \
+              --signature "${f}.sig" \
+              --certificate "${f}.pem" \
+              --certificate-oidc-issuer https://github.com/login/oauth \
+              --certificate-identity ${{ github.actor }}@users.noreply.github.com
+            echo "Verified: $f"
+          done
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            flugos-*.bin
+            flugos-*.elf
+            flugos-*.sig
+            flugos-*.pem
+            flugos-sha256.txt
+            flugos-sha256.txt.sig
+            flugos-sha256.txt.pem
+          generate_release_notes: true

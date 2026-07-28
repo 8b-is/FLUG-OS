@@ -11,6 +11,7 @@
 
 #include <ESP8266WiFi.h>
 #include "wave_output.h"
+#include "version.h"
 
 // ============================================================
 // Configuration
@@ -273,7 +274,7 @@ void setup() {
     Serial.printf("\r\n");
     Serial.printf("  ╔══════════════════════════════════════╗\r\n");
     Serial.printf("  ║        FLUG-OS  {-1, 0, +1}         ║\r\n");
-    Serial.printf("  ║    Fluid Operating System v0.2.0     ║\r\n");
+    Serial.printf("  ║    Fluid Operating System " FLUGOS_FULL_VERSION "   ║\r\n");
     Serial.printf("  ╚══════════════════════════════════════╝\r\n");
     Serial.printf("\r\n");
     Serial.printf("          _ __    ___   _ __  ___\r\n");
