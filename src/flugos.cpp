@@ -11,6 +11,7 @@
 
 #include <ESP8266WiFi.h>
 #include <espnow.h>
+#include "wave_output.h"
 #include <string.h>
 
 // ============================================================
@@ -225,6 +226,8 @@ static void promisc_cb(uint8_t* buf, uint16_t len) {
     snprintf(out + n, sizeof(out) - n, "}\n");
 
     Serial.print(out);
+    // Wave output for sonification / music.vaked.dev
+    output_wave(rssi, type, subtype, millis());
 }
 
 // ============================================================
@@ -250,6 +253,10 @@ static void handle_command(const char* line) {
         else if (strcmp(f, "ctrl") == 0) filter_type = TYPE_CTRL;
         else if (strcmp(f, "all") == 0) filter_type = -1;
         Serial.printf("{\"cmd\":\"filter\",\"type\":\"%s\"}\n", f);
+    else if (strncmp(line, "mode ", 5) == 0) {
+        set_wave_mode(line + 5);
+        Serial.printf("{"cmd":"mode","mode":"%s"}\n", line + 5);
+    }
     }
     else if (strcmp(line, "stats") == 0) {
         Serial.printf("{\"cmd\":\"stats\",\"total\":%u,\"mgmt\":%u,"
