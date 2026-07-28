@@ -30,12 +30,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install PlatformIO via venv
+      - name: Install PlatformIO
         run: |
-          python3 -m venv /tmp/pio-venv
-          source /tmp/pio-venv/bin/activate
-          pip install platformio 2>&1 | tail -3
-          echo "PATH=/tmp/pio-venv/bin:$PATH" >> $GITHUB_ENV
+          python3 -m pip install --break-system-packages platformio 2>&1 | tail -5
+          pio --version
 
       - name: Cache PlatformIO
         uses: actions/cache@v4
