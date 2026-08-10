@@ -10,12 +10,11 @@
  */
 
 #include <ESP8266WiFi.h>
-#include "wave_output.h"
-#include "ascii_ui.h"
-#include "version.h"
 
 // ============================================================
 // Configuration
+// (Defined before headers: ascii_ui.h depends on MAX_CHANNEL /
+//  MAX_SSID_LEN and the runtime globals below — all one TU.)
 // ============================================================
 #define UART_BAUD       115200
 #define MAX_CHANNEL     13
@@ -61,6 +60,10 @@ typedef struct {
 } Stats;
 
 static Stats stats = {0};
+
+#include "wave_output.h"
+#include "ascii_ui.h"
+#include "version.h"
 
 // ============================================================
 // Type name helpers
@@ -305,7 +308,9 @@ void setup() {
     wifi_promiscuous_enable(0);
     wifi_set_promiscuous_rx_cb(promisc_cb);
     wifi_promiscuous_enable(1);
-    wifi_promiscuous_set_filter(WIFI_PKT_MGMT | WIFI_PKT_CTRL | WIFI_PKT_DATA);
+    // Note: SDK 3.x promiscuous mode delivers all frame types
+    // (mgmt/ctrl/data) — the legacy wifi_promiscuous_set_filter API
+    // was removed from user_interface.h. All types are parsed below.
 
     Serial.printf("  ║  802.11 ⊗ sine kernel · axiomquant  ║\r\n");
     Serial.printf("  ║  K(u)=sin(πu)/(πu) · 5 thresholds    ║\r\n");
