@@ -15,6 +15,9 @@
  *   FLUG-OS → UART → matrix_decoder → ayeOS TernaryMatrix → ayeOSd
  */
 
+#ifndef FLUGOS_MATRIX_DECODER_H
+#define FLUGOS_MATRIX_DECODER_H
+
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
