@@ -45,25 +45,31 @@ def freq_to_note(freq: float) -> str:
 # ============================================================
 
 def parse_raw_line(line: str) -> Optional[dict]:
-    """Parse raw mode: 'RSSI DENSITY TYPE' → dict."""
+    """Parse RSSI DENSITY TYPE [DOMAIN KERNEL], including legacy records."""
     parts = line.strip().split()
-    if len(parts) < 3:
+    if len(parts) not in (3, 5):
         return None
     try:
-        return {
-            "rssi": float(parts[0]),
-            "density": float(parts[1]),
-            "frame_type": int(parts[2]),
-        }
-    except (ValueError, IndexError):
+        data = {"rssi": float(parts[0]), "density": float(parts[1]),
+                "frame_type": int(parts[2])}
+        if len(parts) == 5:
+            data.update(domain=int(parts[3]), kernel=float(parts[4]))
+        return data if all(math.isfinite(value) for value in data.values()) else None
+    except (ValueError, OverflowError):
         return None
 
 
 def parse_wave_line(line: str) -> Optional[dict]:
-    """Parse wave mode: single float sample."""
+    """Parse WAVE [DOMAIN KERNEL], including legacy single-sample records."""
+    parts = line.strip().split()
+    if len(parts) not in (1, 3):
+        return None
     try:
-        return {"wave": float(line.strip())}
-    except ValueError:
+        data = {"wave": float(parts[0])}
+        if len(parts) == 3:
+            data.update(domain=int(parts[1]), kernel=float(parts[2]))
+        return data if all(math.isfinite(value) for value in data.values()) else None
+    except (ValueError, OverflowError):
         return None
 
 
@@ -168,6 +174,8 @@ def open_serial(port: str, baud: int, max_retries: int = 3):
 # ============================================================
 
 def main():
+    import serial
+
     parser = argparse.ArgumentParser(
         description="FLUG-OS Wave Bridge — pipe WiFi packet waves to music.vaked.dev",
     )
@@ -208,6 +216,8 @@ def main():
             except serial.SerialException:
                 print("[bridge] serial disconnected, reconnecting...", file=sys.stderr)
                 ser.close()
+                # A replacement connection starts a new byte stream.
+                buf = b""
                 time.sleep(2)
                 ser = open_serial(args.port, args.baud)
                 ser.write(f"mode {args.mode}\n".encode())
