@@ -34,7 +34,7 @@ from typing import Optional
 
 
 DEFAULT_PORT = "/dev/cu.usbmodem1101"
-KNOWN_PORTS = ["/dev/cu.usbmodem1101", "/dev/cu.usbmodem2101"]
+KNOWN_PORTS = ["/dev/cu.usbmodem1101", "/dev/cu.usbmodem2101", "/dev/cu.usbmodem101"]
 DEFAULT_BAUD = 115200
 
 

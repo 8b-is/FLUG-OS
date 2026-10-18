@@ -49,7 +49,7 @@ ternary matrix → ayeOS inference → HF-MAC visualization.
 ✅ Host bridge (bridge/s3_amoled_bridge.py) syncing touchscreen track selection to zoneInn
 ```
 
-## v0.5.0 — ULTRA-OMNI-ZEN Dual-Board Evolution (1.8" `adaye` × 2.06" `vaked`) (current)
+## v0.5.0 — ULTRA-OMNI-ZEN Dual-Board Evolution (1.8" `adaye` × 2.06" `vaked`) (shipped)
 
 ```
 ✅ Unified runtime auto-detection for Waveshare ESP32-S3-Touch-AMOLED-1.8 (368x448, TCA9554 @ 0x20) & 2.06 (410x502)
@@ -58,6 +58,18 @@ ternary matrix → ayeOS inference → HF-MAC visualization.
 ✅ Orbiting 7-stage Ternary NAND nodes + QMI8658 gyro sickness reactivity + touch-to-splash wave excitation
 ✅ Live ESP-NOW peer capsule sync (S3OmniPeerPacket) between 1.8" adaye (1101) and 2.06" vaked (2101)
 ✅ Multi-board host bridge (bridge/s3_amoled_bridge.py --all --status / --splash / --track)
+```
+
+## v0.6.0 — TRIAD INFINITY `{<3, <3, <3}+1 ~---> ∞` 3-Node Mesh (current)
+
+```
+✅ Physical 3-Node Balanced-Ternary Triad {-1, 0, +1}:
+   [-1] ADAYE : Waveshare ESP32-S3-Touch-AMOLED-1.8  (/dev/cu.usbmodem1101, MAC 80:b5:4e:db:3b:c4)
+   [ 0] VAKED : Waveshare ESP32-S3-Touch-AMOLED-2.06 (/dev/cu.usbmodem2101, MAC 80:b5:4e:f2:02:b0)
+   [+1] OMNI  : Waveshare ESP32-S3-Touch-AMOLED-2.06 (/dev/cu.usbmodem101,  MAC 80:b5:4e:f2:02:b4)
+✅ Interleaved Channel 6 Triad Rendezvous hopping (triad_online=3 across all 3 boards while scanning Ch 1..13)
+✅ 3-Body Entanglement Triangle + Central Infinity Lemniscate inside the 64x64 2D Wave Pool
+✅ Coupled 3-node Ultrawhale Ternary NAND Ring + synchronized zoneInn 14 Favourite Musics Crate
 ```
 
 ## v1.0.0 — Stable Release

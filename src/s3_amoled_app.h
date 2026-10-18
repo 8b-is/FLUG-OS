@@ -1,15 +1,18 @@
 /*
- * FLUG-OS — Sovereign ESP32-S3 AMOLED Cockpit Application (v0.5.0+ultra-omni-zen)
- * Unified across:
- *   1. Waveshare ESP32-S3-Touch-AMOLED-1.8  (368x448 SH8601 QSPI, TCA9554, ES8311, "adaye")
- *   2. Waveshare ESP32-S3-Touch-AMOLED-2.06 (410x502 SH8601/CO5300 QSPI, "vaked")
+ * FLUG-OS — Sovereign ESP32-S3 AMOLED Triad Cockpit (v0.6.0+triad-infinity)
+ * {<3, <3, <3}+1 ~---> infinity
  *
- * 5 Interactive Views (Touch Bar + BOOT Button + Serial Control + ESP-NOW Peer Sync):
- *   [0] ZEN    — ULTRA-OMNI-ZEN: baye-rust Jelly Sphere Mind-Wall + 64x64 2D Wave Pool + Eye of Aye
+ * Physical 3-Node Balanced-Ternary Triad {-1, 0, +1}:
+ *   Node 0 [-1] ADAYE : Waveshare ESP32-S3-Touch-AMOLED-1.8  (368x448 SH8601, /dev/cu.usbmodem1101, MAC ..:3B:C4)
+ *   Node 1 [ 0] VAKED : Waveshare ESP32-S3-Touch-AMOLED-2.06 (410x502 CO5300, /dev/cu.usbmodem2101, MAC ..:02:B0)
+ *   Node 2 [+1] OMNI  : Waveshare ESP32-S3-Touch-AMOLED-2.06 (410x502 CO5300, /dev/cu.usbmodem101,  MAC ..:02:B4)
+ *
+ * 5 Interactive Views (Touch Bar + BOOT Button + Serial Control + 3-Body ESP-NOW Mesh):
+ *   [0] ZEN    — {<3,<3,<3}+1->INF: Jelly Sphere Mind-Wall + 3-Body 2D Wave Pool + Infinity Lemniscate
  *   [1] RADIO  — zoneInn / radio.vaked.dev 14 Favourite Musics Crate + 8-band Ternary EQ
  *   [2] 802.11 — FLUG-OS Promiscuous 802.11 Spectrum (Ch 1-13) + Sine Kernel K(u)=sin(pi*u)/(pi*u)
  *   [3] NAND   — Ultrawhale 7-stage Ternary NAND Ring Oscillator x QMI8658 IMU Lissajous
- *   [4] QWAVE  — sphered #Commit=#ValidWitness 5-Stage Witness + Hardware & Partition Switcher
+ *   [4] QWAVE  — sphered #Commit=#ValidWitness 5-Stage Witness + 3-Node Triad Mesh Telemetry
  */
 
 #ifndef FLUGOS_S3_AMOLED_APP_H
@@ -30,6 +33,7 @@
 #include "s3_amoled_hal.h"
 
 #define S3_MAX_CHANNEL  13
+#define S3_MESH_CHANNEL 6
 #define S3_WAVE_HIST    88
 #define S3_LISSA_PTS    44
 #define S3_FAV_COUNT    14
@@ -59,7 +63,7 @@ static const S3FavTrack S3_FAVOURITES[S3_FAV_COUNT] = {
     {"gymnopedie-1",      "Gymnopedie No. 1",      "Erik Satie",          "Minimalist",   "D",    72, 0x5B3981D0},
     {"golden-ratio-432",  "Golden Ratio 432xPhi",  "vaked.dev Studio",    "Harmonic",     "A432",108, 0x16180339},
     {"beethoven-5th",     "Symphony No. 5 Op.67",  "L. van Beethoven",    "Classical",    "Cm",  108, 0x77E20508},
-    {"ode-to-joy",        "Ode to Joy (9th)",      "L. van Beethoven",    "Choral",       "D",   120, 0x9E3779B9},
+    {"ode-to-joy",        "Ode to Joy (9th)",      "L. van Beethoven",      "Choral",       "D",   120, 0x9E3779B9},
     {"fur-elise",         "Fur Elise WoO 59",      "L. van Beethoven",    "Bagatelle",    "Am",   76, 0x4A1D83C2},
     {"pachelbel-canon",   "Canon in D Major",      "Johann Pachelbel",    "Baroque",      "D",    64, 0x2B992DD5},
     {"midnight-sovereign","Midnight Sovereign",    "8b-is x vaked",       "Synthwave",    "Cm",  114, 0x8B15F00D},
@@ -124,14 +128,12 @@ static void s3_wave_pool_step() {
             g_wp_u_prev[y][x] = (int16_t)damped;
         }
     }
-    // Absorbing boundary conditions
     for (int i = 0; i < WAVE_POOL_N; i++) {
         g_wp_u_prev[0][i]               = 0;
         g_wp_u_prev[WAVE_POOL_N - 1][i] = 0;
         g_wp_u_prev[i][0]               = 0;
         g_wp_u_prev[i][WAVE_POOL_N - 1] = 0;
     }
-    // Swap u_curr and u_prev
     for (int y = 0; y < WAVE_POOL_N; y++) {
         for (int x = 0; x < WAVE_POOL_N; x++) {
             int16_t tmp       = g_wp_u_curr[y][x];
@@ -142,23 +144,43 @@ static void s3_wave_pool_step() {
 }
 
 // ============================================================
-// ESP-NOW Peer Capsule Protocol (adaye 1.8" <-> vaked 2.06")
+// 3-Node Triad Mesh State ({<3, <3, <3}+1 ~---> infinity)
+//   node_id 0 : ADAYE [-1] (1.8" 368x448, MAC ..:3B:C4)
+//   node_id 1 : VAKED [ 0] (2.06" 410x502, MAC ..:02:B0)
+//   node_id 2 : OMNI  [+1] (2.06" 410x502, MAC ..:02:B4)
 // ============================================================
 typedef struct __attribute__((packed)) {
-    uint8_t  magic[4];      // "OMNI"
-    uint8_t  board_is_18;   // 1 = 1.8" adaye, 0 = 2.06" vaked
+    uint8_t  magic[4];      // "TRIA"
+    uint8_t  node_id;       // 0=adaye(-1), 1=vaked(0), 2=omni(+1)
+    int8_t   trit_pole;     // -1, 0, +1
     uint8_t  track_idx;     // 0..13
     uint8_t  qt_byte;       // QuantTern affect byte
+    int8_t   ax_i8;         // IMU ax * 64
+    int8_t   ay_i8;         // IMU ay * 64
+    int8_t   nand_trit;     // local NAND ring head trit
     uint8_t  splash_x;      // 0..63 wave pool x
     uint8_t  splash_y;      // 0..63 wave pool y
     int16_t  splash_amp;    // wave splash amplitude
     uint32_t seq;           // witness sequence
-} S3OmniPeerPacket;
+} S3TriadCapsule;
+
+typedef struct {
+    bool          online;
+    uint8_t       qt_byte;
+    int8_t        ax_i8;
+    int8_t        ay_i8;
+    int8_t        nand_trit;
+    uint32_t      rx_cnt;
+    unsigned long last_ms;
+} S3TriadPeerState;
+
+static uint8_t          g_triad_self_id   = 0;   // 0=adaye, 1=vaked, 2=omni
+static int8_t           g_triad_self_pole = -1;  // -1, 0, +1
+static const char*      g_triad_persona   = "adaye";
+static const char*      g_triad_ROLE      = "SUBCRITICAL";
+static S3TriadPeerState g_triad_nodes[3];
 
 static volatile uint32_t g_s3_peer_rx_cnt = 0;
-static volatile uint8_t  g_s3_peer_qt     = 0x15;
-static volatile uint8_t  g_s3_peer_seen   = 0;
-static unsigned long     g_s3_peer_last_ms = 0;
 static bool              g_s3_espnow_ok   = false;
 
 // ============================================================
@@ -175,10 +197,12 @@ static volatile int8_t   g_s3_last_rssi   = -62;
 static volatile uint8_t  g_s3_last_type   = 0;
 static volatile uint8_t  g_s3_last_sub    = 8;
 
-static int      g_s3_channel     = 6;
+static int      g_s3_channel     = S3_MESH_CHANNEL;
+static int      g_s3_scan_ch     = 1;
+static bool     g_s3_mesh_slot   = true;
 static bool     g_s3_hopping     = true;
 static uint8_t  g_s3_active_tab  = 0;   // 0=ZEN, 1=RADIO, 2=802.11, 3=NAND, 4=QWAVE
-static int      g_s3_track_idx   = 0;   // 0..13
+static int      g_s3_track_idx   = 7;   // Default #08: Golden Ratio 432xPhi
 static bool     g_s3_playing     = true;
 static uint32_t g_s3_witness_seq = 1;
 static float    g_s3_orbit_angle = 0.0f;
@@ -203,19 +227,63 @@ static int16_t  g_s3_lissa_y[S3_LISSA_PTS];
 static float    g_s3_phase        = 0.0f;
 
 // ============================================================
-// ESP-NOW Receive & Broadcast Helpers
+// Triad Node Auto-Identification & ESP-NOW Mesh
 // ============================================================
+static void s3_triad_assign_identity() {
+    memset(g_triad_nodes, 0, sizeof(g_triad_nodes));
+    if (g_board_is_18 || g_s3_mac[5] == 0xC4) {
+        g_triad_self_id   = 0;
+        g_triad_self_pole = -1;
+        g_triad_persona   = "adaye";
+        g_triad_ROLE      = "SUBCRITICAL [-1]";
+    } else if (g_s3_mac[5] == 0xB0) {
+        g_triad_self_id   = 1;
+        g_triad_self_pole = 0;
+        g_triad_persona   = "vaked";
+        g_triad_ROLE      = "ZERO-POINT [0]";
+    } else {
+        g_triad_self_id   = 2;
+        g_triad_self_pole = +1;
+        g_triad_persona   = "omni";
+        g_triad_ROLE      = "SUPERCRITICAL [+1]";
+    }
+    g_triad_nodes[g_triad_self_id].online    = true;
+    g_triad_nodes[g_triad_self_id].qt_byte   = g_imu.qt_byte;
+    g_triad_nodes[g_triad_self_id].nand_trit = g_s3_nand_ring[0];
+}
+
+static uint8_t s3_triad_online_count() {
+    unsigned long now = millis();
+    uint8_t cnt = 0;
+    for (int i = 0; i < 3; i++) {
+        if (i == g_triad_self_id) {
+            cnt++;
+        } else if (g_triad_nodes[i].online && (now - g_triad_nodes[i].last_ms < 15000)) {
+            cnt++;
+        }
+    }
+    return cnt;
+}
+
 static void s3_espnow_recv_cb(const uint8_t* mac_addr, const uint8_t* data, int len) {
-    if (!data || len < (int)sizeof(S3OmniPeerPacket)) return;
-    const S3OmniPeerPacket* pkt = (const S3OmniPeerPacket*)data;
-    if (pkt->magic[0] != 'O' || pkt->magic[1] != 'M' || pkt->magic[2] != 'N' || pkt->magic[3] != 'I') {
+    if (!data || len < (int)sizeof(S3TriadCapsule)) return;
+    const S3TriadCapsule* pkt = (const S3TriadCapsule*)data;
+    if (pkt->magic[0] != 'T' || pkt->magic[1] != 'R' || pkt->magic[2] != 'I' || pkt->magic[3] != 'A') {
         return;
     }
+    uint8_t nid = pkt->node_id;
+    if (nid > 2 || nid == g_triad_self_id) return;
+
     g_s3_peer_rx_cnt++;
-    g_s3_peer_qt      = pkt->qt_byte;
-    g_s3_peer_seen    = 1;
-    g_s3_peer_last_ms = millis();
-    if (pkt->track_idx < S3_FAV_COUNT) {
+    g_triad_nodes[nid].online    = true;
+    g_triad_nodes[nid].qt_byte   = pkt->qt_byte;
+    g_triad_nodes[nid].ax_i8     = pkt->ax_i8;
+    g_triad_nodes[nid].ay_i8     = pkt->ay_i8;
+    g_triad_nodes[nid].nand_trit = pkt->nand_trit;
+    g_triad_nodes[nid].rx_cnt++;
+    g_triad_nodes[nid].last_ms   = millis();
+
+    if (pkt->track_idx < S3_FAV_COUNT && pkt->splash_amp > 3000) {
         g_s3_track_idx = pkt->track_idx;
     }
     if (pkt->splash_amp != 0) {
@@ -225,19 +293,33 @@ static void s3_espnow_recv_cb(const uint8_t* mac_addr, const uint8_t* data, int 
 
 static void s3_espnow_broadcast(uint8_t sx, uint8_t sy, int16_t amp) {
     if (!g_s3_espnow_ok) return;
-    S3OmniPeerPacket pkt;
-    pkt.magic[0]    = 'O';
-    pkt.magic[1]    = 'M';
-    pkt.magic[2]    = 'N';
-    pkt.magic[3]    = 'I';
-    pkt.board_is_18 = g_board_is_18 ? 1 : 0;
-    pkt.track_idx   = (uint8_t)g_s3_track_idx;
-    pkt.qt_byte     = g_imu.qt_byte;
-    pkt.splash_x    = sx;
-    pkt.splash_y    = sy;
-    pkt.splash_amp  = amp;
-    pkt.seq         = g_s3_witness_seq;
+    S3TriadCapsule pkt;
+    pkt.magic[0]   = 'T';
+    pkt.magic[1]   = 'R';
+    pkt.magic[2]   = 'I';
+    pkt.magic[3]   = 'A';
+    pkt.node_id    = g_triad_self_id;
+    pkt.trit_pole  = g_triad_self_pole;
+    pkt.track_idx  = (uint8_t)g_s3_track_idx;
+    pkt.qt_byte    = g_imu.qt_byte;
+    int ax_i = (int)(g_imu.ax * 64.0f);
+    int ay_i = (int)(g_imu.ay * 64.0f);
+    if (ax_i < -100) ax_i = -100; if (ax_i > 100) ax_i = 100;
+    if (ay_i < -100) ay_i = -100; if (ay_i > 100) ay_i = 100;
+    pkt.ax_i8      = (int8_t)ax_i;
+    pkt.ay_i8      = (int8_t)ay_i;
+    pkt.nand_trit  = g_s3_nand_ring[0];
+    pkt.splash_x   = sx;
+    pkt.splash_y   = sy;
+    pkt.splash_amp = amp;
+    pkt.seq        = g_s3_witness_seq;
+
     static const uint8_t bcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    // Ensure we transmit on the Triad Mesh Rendezvous Channel (CH 6) so all 3 nodes hear it
+    int prev_ch = g_s3_channel;
+    if (prev_ch != S3_MESH_CHANNEL) {
+        esp_wifi_set_channel(S3_MESH_CHANNEL, WIFI_SECOND_CHAN_NONE);
+    }
     esp_now_send(bcast, (const uint8_t*)&pkt, sizeof(pkt));
 }
 
@@ -270,11 +352,12 @@ static void IRAM_ATTR s3_wifi_promisc_cb(void* buf, wifi_promiscuous_pkt_type_t 
         ftype = (hdr->frame_ctrl >> 2) & 0x03;
         fsub  = (hdr->frame_ctrl >> 4) & 0x0F;
 
-        // Detect sibling Waveshare board over the air (OUI 80:B5:4E)
+        // Detect sibling Waveshare Triad boards over the air by OUI 80:B5:4E
         if (hdr->addr2[0] == 0x80 && hdr->addr2[1] == 0xB5 && hdr->addr2[2] == 0x4E &&
             (hdr->addr2[5] != g_s3_mac[5])) {
-            g_s3_peer_seen = 1;
-            g_s3_peer_rx_cnt++;
+            uint8_t peer_id = (hdr->addr2[5] == 0xC4) ? 0 : ((hdr->addr2[5] == 0xB0) ? 1 : 2);
+            g_triad_nodes[peer_id].online  = true;
+            g_triad_nodes[peer_id].last_ms = millis();
         }
 
         // Extract beacon / probe response SSID (IE tag 0)
@@ -339,7 +422,7 @@ static void IRAM_ATTR s3_wifi_promisc_cb(void* buf, wifi_promiscuous_pkt_type_t 
 }
 
 // ============================================================
-// Ternary NAND Ring, 2D Wave Pool & Waveform Physics Update
+// Ternary NAND Ring, 3-Body Wave Pool & Waveform Physics Update
 // ============================================================
 static inline int8_t s3_ternary_nand(int8_t a, int8_t b) {
     int8_t mn = (a < b) ? a : b;
@@ -347,11 +430,20 @@ static inline int8_t s3_ternary_nand(int8_t a, int8_t b) {
 }
 
 static void s3_step_physics() {
-    // 1. Step 7-stage cross-coupled ternary NAND ring oscillator
-    int8_t imu_mod = g_imu.trit_v;
-    int8_t rf_mod  = ternary_seam_rssi_to_code(g_s3_last_rssi);
-    int8_t next0   = s3_ternary_nand(g_s3_nand_ring[6],
-                     (int8_t)((imu_mod + rf_mod > 0) ? 1 : (imu_mod + rf_mod < 0 ? -1 : 0)));
+    // Update self node entry in Triad table
+    g_triad_nodes[g_triad_self_id].online    = true;
+    g_triad_nodes[g_triad_self_id].qt_byte   = g_imu.qt_byte;
+    g_triad_nodes[g_triad_self_id].ax_i8     = (int8_t)(g_imu.ax * 64.0f);
+    g_triad_nodes[g_triad_self_id].ay_i8     = (int8_t)(g_imu.ay * 64.0f);
+    g_triad_nodes[g_triad_self_id].nand_trit = g_s3_nand_ring[0];
+    g_triad_nodes[g_triad_self_id].last_ms   = millis();
+
+    // 1. Step 7-stage cross-coupled ternary NAND ring oscillator coupled to Triad peers
+    int8_t peer_sum = g_triad_nodes[0].nand_trit + g_triad_nodes[1].nand_trit + g_triad_nodes[2].nand_trit;
+    int8_t imu_mod  = g_imu.trit_v;
+    int8_t rf_mod   = ternary_seam_rssi_to_code(g_s3_last_rssi);
+    int8_t combined = (imu_mod + rf_mod + peer_sum > 0) ? 1 : ((imu_mod + rf_mod + peer_sum < 0) ? -1 : 0);
+    int8_t next0    = s3_ternary_nand(g_s3_nand_ring[6], combined);
     for (int i = 6; i >= 1; i--) {
         int8_t fb = (i == 3) ? g_s3_nand_ring[0] : g_s3_nand_ring[(i + 5) % 7];
         g_s3_nand_ring[i] = s3_ternary_nand(g_s3_nand_ring[i - 1], fb);
@@ -368,13 +460,17 @@ static void s3_step_physics() {
     g_s3_wave_hist[g_s3_wave_head] = carrier;
     g_s3_wave_head = (g_s3_wave_head + 1) % S3_WAVE_HIST;
 
-    // 3. Step 64x64 2D Wave Pool + periodic harmonic / IMU / RF excitation
-    if ((g_s3_witness_seq % 4) == 0) {
-        // Orbiting harmonic wave source driven by active zoneInn BPM + IMU tilt
-        float rad = 14.0f + 6.0f * sinf(g_s3_phase * 0.5f);
-        int wx = 32 + (int)(cosf(g_s3_orbit_angle) * rad + g_imu.ax * 10.0f);
-        int wy = 32 + (int)(sinf(g_s3_orbit_angle) * rad + g_imu.ay * 10.0f);
-        int16_t amp = (int16_t)(2800.0f * k_val + (float)g_s3_nand_ring[0] * 1400.0f);
+    // 3. Step 64x64 2D Wave Pool with 3-Body Triad Harmonic Sources ({<3,<3,<3}+1)
+    if ((g_s3_witness_seq % 3) == 0) {
+        int n_idx = (int)(g_s3_witness_seq / 3) % 3;
+        float base_ang = g_s3_orbit_angle + (float)n_idx * 2.0943951f; // 120 deg Triad spacing
+        float rad = 14.0f + 5.0f * sinf(g_s3_phase * 0.5f + (float)n_idx);
+        float tilt_x = (float)g_triad_nodes[n_idx].ax_i8 / 64.0f;
+        float tilt_y = (float)g_triad_nodes[n_idx].ay_i8 / 64.0f;
+        int wx = 32 + (int)(cosf(base_ang) * rad + tilt_x * 9.0f);
+        int wy = 32 + (int)(sinf(base_ang) * rad + tilt_y * 9.0f);
+        int16_t pole_sign = (n_idx == 0) ? -1 : ((n_idx == 1) ? 1 : 1);
+        int16_t amp = (int16_t)((2600.0f * k_val + 1400.0f) * (float)pole_sign);
         s3_wave_pool_splash(wx, wy, amp, 4);
     }
     if (g_imu.sickness > 0.25f) {
@@ -456,11 +552,19 @@ static void s3_render_header(S3Canvas& c) {
     c.fill_rect(0, 0, W, 40, COL_BG_ELEV);
     c.draw_hline(0, 40, W, COL_BORDER);
 
-    // Brand + Board Persona
-    c.fill_circle(14, 20, 5, COL_MINT);
-    c.draw_circle(14, 20, 8, COL_GOLD);
-    c.draw_text(28, 7, g_board_is_18 ? "OMNI-ZEN // ADAYE" : "OMNI-ZEN // VAKED", COL_TEXT, 2);
-    c.draw_text(28, 25, g_board_is_18 ? "1.8\" 368x448 v0.5.0" : "2.06\" 410x502 v0.5.0", COL_MINT, 1);
+    // Triad Pole Badge + Persona
+    uint16_t pcol = s3_trit_color(g_triad_self_pole);
+    c.fill_circle(14, 20, 6, pcol);
+    c.draw_circle(14, 20, 9, COL_CYAN);
+
+    const char* hdr_title = (g_triad_self_id == 0) ? "[-1] ADAYE // <3+1"
+                          : ((g_triad_self_id == 1) ? "[ 0] VAKED // <3+1"
+                                                    : "[+1] OMNI  // <3+1");
+    c.draw_text(28, 7, hdr_title, COL_TEXT, 2);
+
+    char sub_hdr[40];
+    snprintf(sub_hdr, sizeof(sub_hdr), "{<3,<3,<3}+1->INF [%u/3]", s3_triad_online_count());
+    c.draw_text(28, 25, sub_hdr, pcol, 1);
 
     // QuantTern affect pill
     int qt_x = W - 150;
@@ -492,7 +596,7 @@ static void s3_render_footer_tabs(S3Canvas& c) {
     c.draw_hline(0, y, W, COL_BORDER);
 
     const char* labels[S3_TAB_COUNT] = {"ZEN", "RADIO", "802.11", "NAND", "QWAVE"};
-    const char* subs[S3_TAB_COUNT]   = {"sphere", "zoneInn", "rf+sinc", "imu+osc", "sphered"};
+    const char* subs[S3_TAB_COUNT]   = {"<3+1->inf", "zoneInn", "rf+sinc", "imu+osc", "triad"};
     uint16_t cols[S3_TAB_COUNT]      = {COL_MINT, COL_GOLD, COL_CYAN, COL_CORAL, COL_VIOLET};
 
     int gap = 4;
@@ -513,15 +617,15 @@ static void s3_render_footer_tabs(S3Canvas& c) {
 }
 
 // ============================================================
-// TAB 0: ULTRA-OMNI-ZEN — Jelly Sphere Mind-Wall + 2D Wave Pool
-// (Evolves baye-rust adaye + zoneInn + ultrawhale NAND + qwave)
+// TAB 0: TRIAD INFINITY ZEN — {<3,<3,<3}+1 ~---> infinity
+// Jelly Sphere Mind-Wall + 3-Body Entangled Wave Pool + Infinity Curve
 // ============================================================
 static void s3_render_tab_zen(S3Canvas& c) {
     int W  = (int)g_lcd_w;
     int H  = (int)g_lcd_h;
     int cx = W / 2;
-    int cy = 40 + (H - 92) / 2 - 6;
-    int outer_r = (W < 380) ? 142 : 158;
+    int cy = 40 + (H - 96) / 2 - 6;
+    int outer_r = (W < 380) ? 138 : 156;
     int inner_r = outer_r - 14;
     int outer_r2 = outer_r * outer_r;
     int inner_r2 = inner_r * inner_r;
@@ -546,7 +650,6 @@ static void s3_render_tab_zen(S3Canvas& c) {
             if (r2 > outer_r2) continue;
 
             if (r2 >= inner_r2) {
-                // Orbiting Amber/Mint Info Ring Membrane
                 int ring_band = r2 - inner_r2;
                 int ring_span = outer_r2 - inner_r2;
                 if (ring_band < (ring_span / 5) || ring_band > (ring_span * 4 / 5)) {
@@ -555,7 +658,6 @@ static void s3_render_tab_zen(S3Canvas& c) {
                     row_ptr[px] = COL_BG_ELEV;
                 }
             } else {
-                // Inside the Jelly Sphere: sample 64x64 2D Wave Pool
                 int gx = ((dx + inner_r) * (WAVE_POOL_N - 2)) / (2 * inner_r) + 1;
                 int gy = ((dy + inner_r) * (WAVE_POOL_N - 2)) / (2 * inner_r) + 1;
                 if (gx < 1) gx = 1;
@@ -564,7 +666,6 @@ static void s3_render_tab_zen(S3Canvas& c) {
                 if (gy > WAVE_POOL_N - 2) gy = WAVE_POOL_N - 2;
 
                 int16_t h = g_wp_u_curr[gy][gx];
-                // Radial Fresnel rim glow near inner_r
                 int rim = (r2 * 48) / inner_r2;
 
                 uint8_t r = 6 + (uint8_t)((rim * 18) >> 6);
@@ -574,14 +675,12 @@ static void s3_render_tab_zen(S3Canvas& c) {
                 if (h > 64) {
                     uint32_t mag = (uint32_t)h >> 5;
                     if (mag > 220) mag = 220;
-                    // Sovereign Mint / Cyan constructive wave crest
                     r = (uint8_t)min(255U, (uint32_t)r + (mag >> 2) + (sick_u8 >> 1));
                     g = (uint8_t)min(255U, (uint32_t)g + mag);
                     b = (uint8_t)min(255U, (uint32_t)b + ((mag * 3) >> 2));
                 } else if (h < -64) {
                     uint32_t mag = (uint32_t)(-h) >> 5;
                     if (mag > 220) mag = 220;
-                    // QuantTern Violet / Indigo wave trough
                     r = (uint8_t)min(255U, (uint32_t)r + ((mag * 3) >> 2) + (sick_u8 >> 1));
                     g = (uint8_t)min(255U, (uint32_t)g + (mag >> 2));
                     b = (uint8_t)min(255U, (uint32_t)b + mag);
@@ -589,7 +688,6 @@ static void s3_render_tab_zen(S3Canvas& c) {
                     r = (uint8_t)min(255U, (uint32_t)r + (sick_u8 >> 1));
                 }
 
-                // Subtle grid lines every 8 cells inside the sphere
                 if (((px - cx) & 31) == 0 || ((py - cy) & 31) == 0) {
                     g = (uint8_t)min(255, (int)g + 10);
                     b = (uint8_t)min(255, (int)b + 16);
@@ -611,38 +709,66 @@ static void s3_render_tab_zen(S3Canvas& c) {
         c.draw_circle(nx, ny, 6, COL_TEXT);
     }
 
-    // 3. Eye of Aye Central Spark + IMU Tilt Reticle
-    int eye_x = cx + (int)(g_imu.ax * 36.0f);
-    int eye_y = cy + (int)(g_imu.ay * 36.0f);
-    c.draw_circle(cx, cy, inner_r / 2, COL_GRID);
-    c.draw_line(cx - 14, cy, cx + 14, cy, COL_GRID, 1);
-    c.draw_line(cx, cy - 14, cx, cy + 14, COL_GRID, 1);
-    c.fill_circle(eye_x, eye_y, 5, (sick > 0.3f) ? COL_CORAL : COL_MINT);
-    c.draw_circle(eye_x, eye_y, 10, COL_GOLD);
-    c.draw_circle(eye_x, eye_y, 15, COL_CYAN);
+    // 3. 3-Body Triad Entanglement Triangle {<3, <3, <3} + Central Infinity Lemniscate (+1 -> inf)
+    int tx[3], ty[3];
+    uint16_t tcol[3] = {COL_CORAL, COL_GOLD, COL_CYAN};
+    for (int n = 0; n < 3; n++) {
+        float base_ang = g_s3_orbit_angle * 0.6f + (float)n * 2.0943951f - 1.570796f;
+        float rad = (float)inner_r * 0.46f;
+        int dx_imu = ((int)g_triad_nodes[n].ax_i8 * 24) / 64;
+        int dy_imu = ((int)g_triad_nodes[n].ay_i8 * 24) / 64;
+        tx[n] = cx + (int)(cosf(base_ang) * rad) + dx_imu;
+        ty[n] = cy + (int)(sinf(base_ang) * rad) + dy_imu;
+    }
+    // Connect the 3 Triad nodes with the {<3,<3,<3} entanglement triangle
+    c.draw_line(tx[0], ty[0], tx[1], ty[1], COL_MINT, 1);
+    c.draw_line(tx[1], ty[1], tx[2], ty[2], COL_GOLD, 1);
+    c.draw_line(tx[2], ty[2], tx[0], ty[0], COL_CYAN, 1);
 
-    // 4. Top & Bottom Zen HUD Pills
+    for (int n = 0; n < 3; n++) {
+        bool is_self = (n == g_triad_self_id);
+        c.fill_circle(tx[n], ty[n], is_self ? 6 : 4, tcol[n]);
+        c.draw_circle(tx[n], ty[n], is_self ? 11 : 7, is_self ? COL_MINT : COL_TEXT);
+    }
+
+    // Draw Infinity Lemniscate curve (x = a cos(t)/(1+sin^2(t)), y = a sin(t)cos(t)/(1+sin^2(t))) at centroid
+    int cent_x = (tx[0] + tx[1] + tx[2]) / 3;
+    int cent_y = (ty[0] + ty[1] + ty[2]) / 3;
+    float inf_a = 28.0f;
+    for (int i = 0; i < 24; i++) {
+        float t0 = (float)i * (2.0f * 3.14159265f / 24.0f) + g_s3_phase * 0.3f;
+        float t1 = (float)(i + 1) * (2.0f * 3.14159265f / 24.0f) + g_s3_phase * 0.3f;
+        float d0 = 1.0f + sinf(t0) * sinf(t0);
+        float d1 = 1.0f + sinf(t1) * sinf(t1);
+        int ix0 = cent_x + (int)(inf_a * cosf(t0) / d0);
+        int iy0 = cent_y + (int)(inf_a * sinf(t0) * cosf(t0) / d0);
+        int ix1 = cent_x + (int)(inf_a * cosf(t1) / d1);
+        int iy1 = cent_y + (int)(inf_a * sinf(t1) * cosf(t1) / d1);
+        c.draw_line(ix0, iy0, ix1, iy1, COL_VIOLET, 2);
+    }
+    c.fill_circle(cent_x, cent_y, 3, COL_MINT);
+
+    // 4. Top & Bottom Triad HUD Pills
     const S3FavTrack* trk = &S3_FAVOURITES[g_s3_track_idx];
     char top_lbl[56];
     snprintf(top_lbl, sizeof(top_lbl), "%s // %s (%uBPM)",
              trk->title, trk->key_sig, trk->bpm);
     top_lbl[36] = '\0';
-    c.draw_text_centered(cx, 46, top_lbl, COL_MINT, 1);
+    c.draw_text_centered(cx, 45, top_lbl, COL_MINT, 1);
 
-    // Bottom Zen Telemetry Bar (above footer tabs)
-    int hud_y = H - 90;
-    c.fill_card(10, hud_y, W - 20, 34, COL_BG_ELEV, COL_BORDER);
+    // Bottom Triad Mesh Bar (shows all 3 boards: -1 ADAYE, 0 VAKED, +1 OMNI)
+    int hud_y = H - 92;
+    c.fill_card(8, hud_y, W - 16, 36, COL_BG_ELEV, COL_BORDER);
     char hud1[64];
-    snprintf(hud1, sizeof(hud1), "WAVE:%lu  PKTS:%lu  CH:%02d (%ddBm)",
-             (unsigned long)g_wp_splashes, (unsigned long)g_s3_total_pkts,
-             g_s3_channel, (int)g_s3_last_rssi);
-    c.draw_text(18, hud_y + 6, hud1, COL_TEXT, 1);
+    snprintf(hud1, sizeof(hud1), "[-1]ADA:%02X  <3  [0]VAK:%02X  <3  [+1]OMN:%02X  +1->INF",
+             g_triad_nodes[0].qt_byte, g_triad_nodes[1].qt_byte, g_triad_nodes[2].qt_byte);
+    c.draw_text_centered(cx, hud_y + 7, hud1, COL_MINT, 1);
 
     char hud2[64];
-    snprintf(hud2, sizeof(hud2), "PEER:%s (rx:%lu)  TAP SPHERE=SPLASH  BTN=TAB",
-             g_s3_peer_seen ? (g_board_is_18 ? "VAKED-2.06" : "ADAYE-1.8") : "SCANNING",
-             (unsigned long)g_s3_peer_rx_cnt);
-    c.draw_text(18, hud_y + 19, hud2, g_s3_peer_seen ? COL_MINT : COL_GOLD, 1);
+    snprintf(hud2, sizeof(hud2), "TRIAD:%u/3  RX:%lu  WAVE:%lu  PKTS:%lu (CH%02d)",
+             s3_triad_online_count(), (unsigned long)g_s3_peer_rx_cnt,
+             (unsigned long)g_wp_splashes, (unsigned long)g_s3_total_pkts, g_s3_channel);
+    c.draw_text_centered(cx, hud_y + 21, hud2, COL_GOLD, 1);
 }
 
 // ============================================================
@@ -654,7 +780,6 @@ static void s3_render_tab_radio(S3Canvas& c) {
     int cw = W - 16;
     const S3FavTrack* trk = &S3_FAVOURITES[g_s3_track_idx];
 
-    // Now Playing Hero Card
     c.fill_card(8, 46, cw, 104, COL_BG_ELEV, COL_MINT);
     c.draw_text(18, 53, "RADIO.VAKED.DEV // ZONEINN CRATE", COL_MINT, 1);
 
@@ -670,7 +795,6 @@ static void s3_render_tab_radio(S3Canvas& c) {
              trk->genre, trk->key_sig, trk->bpm, (unsigned long)trk->fnv_hash);
     c.draw_text(18, 101, meta_buf, COL_GOLD, 1);
 
-    // Transport buttons inside Hero Card
     int bw1 = (cw - 32) / 4;
     int bw2 = (cw - 32) - 2 * bw1;
     int bx0 = 16;
@@ -682,13 +806,12 @@ static void s3_render_tab_radio(S3Canvas& c) {
 
     c.fill_card(bx1, 118, bw2, 24, g_s3_playing ? COL_MINT_DARK : COL_GOLD_DARK,
                 g_s3_playing ? COL_MINT : COL_GOLD);
-    c.draw_text_centered(bx1 + bw2 / 2, 126, g_s3_playing ? "LIVE // ES8311+BT" : "PAUSED // TAP",
+    c.draw_text_centered(bx1 + bw2 / 2, 126, g_s3_playing ? "LIVE // TRIAD+BT" : "PAUSED // TAP",
                          g_s3_playing ? COL_MINT : COL_GOLD, 1);
 
     c.fill_card(bx2, 118, bw1, 24, COL_BG_PANEL, COL_CYAN);
     c.draw_text_centered(bx2 + bw1 / 2, 126, "NEXT >", COL_CYAN, 1);
 
-    // 8-Band Ternary Equalizer Card
     c.fill_card(8, 156, cw, 102, COL_BG_ELEV, COL_BORDER);
     c.draw_text(18, 163, "8-BAND TERNARY HARMONIC EQ {-1, 0, +1}", COL_SUBTEXT, 1);
     const char* hz_lbl[8] = {"60", "144", "288", "432", "528", "699", "1.1k", "4.3k"};
@@ -712,7 +835,6 @@ static void s3_render_tab_radio(S3Canvas& c) {
         c.draw_text_centered(bx + eq_bw / 2, 242, hz_lbl[b], COL_DIM, 1);
     }
 
-    // Scrollable Favourite Crate Window (tap any row to jump)
     int crate_y = 264;
     int crate_h = (H - 56) - crate_y;
     int rows    = (crate_h - 24) / 22;
@@ -720,7 +842,7 @@ static void s3_render_tab_radio(S3Canvas& c) {
     if (rows < 4) rows = 4;
 
     c.fill_card(8, crate_y, cw, crate_h, COL_BG_ELEV, COL_BORDER);
-    c.draw_text(18, crate_y + 7, "FAVOURITE MUSICS CRATE (TAP ROW TO PLAY)", COL_GOLD, 1);
+    c.draw_text(18, crate_y + 7, "FAVOURITE MUSICS CRATE (SYNCS ALL 3 BOARDS)", COL_GOLD, 1);
 
     int start_idx = g_s3_track_idx - (rows / 2);
     if (start_idx < 0) start_idx = 0;
@@ -754,7 +876,6 @@ static void s3_render_tab_wifi(S3Canvas& c) {
     int H  = (int)g_lcd_h;
     int cw = W - 16;
 
-    // 13-Channel Spectrum Analyzer Card
     c.fill_card(8, 46, cw, 122, COL_BG_ELEV, COL_CYAN);
     c.draw_text(18, 53, "802.11 SPECTRUM (CH 01..13)", COL_CYAN, 1);
 
@@ -787,7 +908,6 @@ static void s3_render_tab_wifi(S3Canvas& c) {
         c.draw_text_centered(bx + ch_bw / 2, 150, clbl, is_cur ? COL_CYAN : COL_SUBTEXT, 1);
     }
 
-    // AxiomQuant Universal Sine Kernel K(u) = sin(pi*u)/(pi*u)
     c.fill_card(8, 174, cw, 96, COL_BG_ELEV, COL_BORDER);
     c.draw_text(18, 181, "SINE KERNEL K(u)=sin(pi*u)/(pi*u)", COL_GOLD, 1);
 
@@ -809,7 +929,6 @@ static void s3_render_tab_wifi(S3Canvas& c) {
         c.draw_line(x0, y0, x1, y1, COL_MINT, 2);
     }
 
-    // Ternary Seam Matrix & Controls Card
     int mat_y = 276;
     int mat_h = (H - 56) - mat_y;
     c.fill_card(8, mat_y, cw, mat_h, COL_BG_ELEV, COL_BORDER);
@@ -827,7 +946,6 @@ static void s3_render_tab_wifi(S3Canvas& c) {
              (unsigned long)g_s3_probe_pkts);
     c.draw_text(18, mat_y + 35, cnt_line, COL_SUBTEXT, 1);
 
-    // Render 3x28 ternary matrix strip
     int mcols = (cw - 24) / 11;
     if (mcols > 32) mcols = 32;
     for (int col = 0; col < mcols; col++) {
@@ -839,7 +957,6 @@ static void s3_render_tab_wifi(S3Canvas& c) {
         }
     }
 
-    // Touch controls for channel / hopping / capsule export
     int btn_y = mat_y + mat_h - 32;
     int bw    = (cw - 30) / 4;
     c.fill_card(16, btn_y, bw, 24, COL_BG_PANEL, COL_BORDER);
@@ -852,7 +969,7 @@ static void s3_render_tab_wifi(S3Canvas& c) {
     c.draw_text_centered(40 + 2 * bw + (bw - 6) / 2, btn_y + 8, "CH +", COL_TEXT, 1);
 
     c.fill_card(40 + 3 * bw, btn_y, bw, 24, COL_VIOLET_DARK, COL_VIOLET);
-    c.draw_text_centered(40 + 3 * bw + bw / 2, btn_y + 8, "SYNC", COL_VIOLET, 1);
+    c.draw_text_centered(40 + 3 * bw + bw / 2, btn_y + 8, "TRIAD", COL_VIOLET, 1);
 }
 
 // ============================================================
@@ -863,7 +980,6 @@ static void s3_render_tab_nand(S3Canvas& c) {
     int H  = (int)g_lcd_h;
     int cw = W - 16;
 
-    // 7-Stage Ternary NAND Ring Card
     c.fill_card(8, 46, cw, 116, COL_BG_ELEV, COL_GOLD);
     c.draw_text(18, 53, "ULTRAWHALE 7-STAGE TERNARY NAND RING", COL_GOLD, 1);
 
@@ -892,9 +1008,8 @@ static void s3_render_tab_nand(S3Canvas& c) {
     snprintf(cyc_buf, sizeof(cyc_buf), "CYCLES: %lu  HF: peetpedro/ultrawhale-oscillator",
              (unsigned long)g_s3_nand_cycles);
     c.draw_text(18, 128, cyc_buf, COL_MINT, 1);
-    c.draw_text(18, 142, "COUPLED: 802.11 RF + QMI8658 6-AXIS IMU + 2D WAVE POOL", COL_DIM, 1);
+    c.draw_text(18, 142, "COUPLED: 3-NODE TRIAD + 802.11 RF + QMI8658 6-AXIS IMU", COL_DIM, 1);
 
-    // 2D Lissajous Phase Portrait Card (Tilted by IMU)
     c.fill_card(8, 168, cw, 128, COL_BG_ELEV, COL_CYAN);
     c.draw_text(18, 175, "2D LISSAJOUS PHASE PORTRAIT (TILT BOARD)", COL_CYAN, 1);
 
@@ -909,7 +1024,6 @@ static void s3_render_tab_nand(S3Canvas& c) {
                     cx + g_s3_lissa_x[next], cy + g_s3_lissa_y[next], lcol, 2);
     }
 
-    // QMI8658 IMU & QuantTern Affect Card
     int imu_y = 302;
     int imu_h = (H - 56) - imu_y;
     c.fill_card(8, imu_y, cw, imu_h, COL_BG_ELEV, COL_VIOLET);
@@ -929,7 +1043,7 @@ static void s3_render_tab_nand(S3Canvas& c) {
 }
 
 // ============================================================
-// TAB 4: QWAVE / SPHERED WITNESS & HARDWARE IDENTITY
+// TAB 4: QWAVE / SPHERED WITNESS & 3-NODE TRIAD MESH TELEMETRY
 // ============================================================
 static void s3_render_tab_qwave(S3Canvas& c) {
     int W  = (int)g_lcd_w;
@@ -937,7 +1051,7 @@ static void s3_render_tab_qwave(S3Canvas& c) {
     int cw = W - 16;
 
     // sphered 5-Stage Witness Pipeline Card
-    c.fill_card(8, 46, cw, 118, COL_BG_ELEV, COL_VIOLET);
+    c.fill_card(8, 46, cw, 110, COL_BG_ELEV, COL_VIOLET);
     c.draw_text(18, 53, "QWAVE // SPHERED #COMMIT=#VALIDWITNESS", COL_VIOLET, 1);
 
     const char* glyphs[5] = {"? ADMIT", "~ TRANS", "! VERIFY", "@ ATTR", "> COMMIT"};
@@ -946,68 +1060,62 @@ static void s3_render_tab_qwave(S3Canvas& c) {
     int s_bw   = s_step - 4;
     for (int s = 0; s < 5; s++) {
         int sx = 14 + s * s_step;
-        c.fill_card(sx, 68, s_bw, 36, COL_BG_PANEL, gcols[s]);
-        c.draw_text_centered(sx + s_bw / 2, 78, glyphs[s], gcols[s], 1);
-        c.draw_text_centered(sx + s_bw / 2, 91, "PASS +1", COL_TEXT, 1);
+        c.fill_card(sx, 66, s_bw, 34, COL_BG_PANEL, gcols[s]);
+        c.draw_text_centered(sx + s_bw / 2, 75, glyphs[s], gcols[s], 1);
+        c.draw_text_centered(sx + s_bw / 2, 87, "PASS +1", COL_TEXT, 1);
     }
 
     char wit_buf[64];
     snprintf(wit_buf, sizeof(wit_buf), "WITNESS #%lu <(? admit ~ transform ! verify > commit)>",
              (unsigned long)g_s3_witness_seq);
     wit_buf[44] = '\0';
-    c.draw_text(18, 112, wit_buf, COL_TEXT, 1);
-    c.draw_text(18, 127, "8b-is/qwave SovereignCore + QuantTern + baye-rust 2D Wave", COL_MINT, 1);
+    c.draw_text(18, 108, wit_buf, COL_TEXT, 1);
+    char role_buf[64];
+    snprintf(role_buf, sizeof(role_buf), "ROLE: %s  |  MAC %02X:%02X:%02X:%02X:%02X:%02X",
+             g_triad_ROLE, g_s3_mac[0], g_s3_mac[1], g_s3_mac[2], g_s3_mac[3], g_s3_mac[4], g_s3_mac[5]);
+    c.draw_text(18, 123, role_buf, COL_MINT, 1);
     char rtc_buf[64];
-    snprintf(rtc_buf, sizeof(rtc_buf), "RTC %02u:%02u:%02u | TOUCH (%u,%u) | ES8311:%s",
-             g_imu.rtc_h, g_imu.rtc_m, g_imu.rtc_s, g_touch.x, g_touch.y,
+    snprintf(rtc_buf, sizeof(rtc_buf), "LCD %ux%u | SRAM %uKB | ES8311:%s",
+             g_lcd_w, g_lcd_h, (unsigned int)(ESP.getFreeHeap() / 1024),
              g_es8311_ok ? "OK" : "IDLE");
-    c.draw_text(18, 142, rtc_buf, COL_SUBTEXT, 1);
+    c.draw_text(18, 138, rtc_buf, COL_SUBTEXT, 1);
 
-    // Hardware Identity Card
-    c.fill_card(8, 170, cw, 104, COL_BG_ELEV, COL_BORDER);
-    c.draw_text(18, 177, g_board_is_18
-                ? "WAVESHARE ESP32-S3-TOUCH-AMOLED-1.8 (ADAYE)"
-                : "WAVESHARE ESP32-S3-TOUCH-AMOLED-2.06 (VAKED)", COL_GOLD, 1);
+    // 3-Node Triad Mesh Card ({<3, <3, <3}+1 ~---> infinity)
+    c.fill_card(8, 162, cw, 118, COL_BG_ELEV, COL_GOLD);
+    c.draw_text(18, 169, "TRIAD MESH {<3, <3, <3}+1 ~---> INFINITY", COL_GOLD, 1);
 
-    char mac_line[64];
-    snprintf(mac_line, sizeof(mac_line), "MAC: %02X:%02X:%02X:%02X:%02X:%02X  LX7 @ 240MHz",
-             g_s3_mac[0], g_s3_mac[1], g_s3_mac[2], g_s3_mac[3], g_s3_mac[4], g_s3_mac[5]);
-    c.draw_text(18, 193, mac_line, COL_TEXT, 1);
+    const char* n_names[3] = {"[-1] ADAYE (1.8\" 1101)", "[ 0] VAKED (2.06\" 2101)", "[+1] OMNI  (2.06\" 101)"};
+    uint16_t n_cols[3]     = {COL_CORAL, COL_GOLD, COL_CYAN};
+    for (int n = 0; n < 3; n++) {
+        int ry = 186 + n * 28;
+        bool is_self = (n == g_triad_self_id);
+        c.fill_rect(14, ry, cw - 12, 24, is_self ? COL_BG_PANEL : COL_BG);
+        c.fill_rect(14, ry, 4, 24, n_cols[n]);
+        c.draw_text(22, ry + 8, n_names[n], is_self ? COL_MINT : COL_TEXT, 1);
 
-    char disp_line[64];
-    snprintf(disp_line, sizeof(disp_line), "SH8601 QSPI %ux%u (x_gap=%u) TCA9554:%s",
-             g_lcd_w, g_lcd_h, g_lcd_x_gap, g_board_is_18 ? "0x20" : "N/A");
-    c.draw_text(18, 208, disp_line, COL_SUBTEXT, 1);
-    c.draw_text(18, 223, "I2C(15/14): AXP2101(34) FT3168(38) QMI8658(6B) ES8311(18)", COL_SUBTEXT, 1);
+        char st_buf[36];
+        snprintf(st_buf, sizeof(st_buf), "qt:%02X rx:%lu %s",
+                 g_triad_nodes[n].qt_byte,
+                 (unsigned long)g_triad_nodes[n].rx_cnt,
+                 is_self ? "SELF" : (g_triad_nodes[n].online ? "SYNC" : "WAIT"));
+        c.draw_text_right(W - 16, ry + 8, st_buf, n_cols[n], 1);
+    }
 
-    char heap_line[64];
-    snprintf(heap_line, sizeof(heap_line), "SRAM: %uKB  PSRAM: %uKB  SPLASHES: %lu",
-             (unsigned int)(ESP.getFreeHeap() / 1024),
-             (unsigned int)(ESP.getFreePsram() / 1024),
-             (unsigned long)g_wp_splashes);
-    c.draw_text(18, 238, heap_line, COL_MINT, 1);
-    c.draw_text(18, 253, g_board_is_18
-                ? "PORT: /dev/cu.usbmodem1101 <-> PEER: 2101"
-                : "PORT: /dev/cu.usbmodem2101 <-> PEER: 1101", COL_CYAN, 1);
-
-    // Flash Slot & Backup Status Card
-    int slot_y = 280;
+    // Flash Slot & Triad Action Card
+    int slot_y = 286;
     int slot_h = (H - 56) - slot_y;
     c.fill_card(8, slot_y, cw, slot_h, COL_BG_ELEV, COL_MINT);
-    c.draw_text(18, slot_y + 7, "SOVEREIGN FLASH & BACKUP INTEGRITY", COL_MINT, 1);
-    c.draw_text(18, slot_y + 22, "ACTIVE : FLUG-OS v0.5.0+ultra-omni-zen", COL_TEXT, 1);
-    c.draw_text(18, slot_y + 37, g_board_is_18
-                ? "BACKUP : /tmp/amoled18_adaye_full_backup.bin (1.22MB)"
-                : "FACTORY: 0x0100000 ESP-Brookesia Preserved", COL_SUBTEXT, 1);
+    c.draw_text(18, slot_y + 7, "SOVEREIGN TRIAD FLASH & ENTANGLEMENT", COL_MINT, 1);
+    c.draw_text(18, slot_y + 22, "ACTIVE : FLUG-OS v0.6.0+triad-infinity", COL_TEXT, 1);
 
-    int btn_y = slot_y + slot_h - 36;
+    int btn_y = slot_y + slot_h - 34;
     int bw    = (cw - 28) / 2;
-    c.fill_card(16, btn_y, bw, 28, COL_MINT_DARK, COL_MINT);
-    c.draw_text_centered(16 + bw / 2, btn_y + 10, "OMNI-ZEN ACTIVE", COL_MINT, 1);
+    c.fill_card(16, btn_y, bw, 26, COL_MINT_DARK, COL_MINT);
+    c.draw_text_centered(16 + bw / 2, btn_y + 9, "PULSE TRIAD +1", COL_MINT, 1);
 
-    c.fill_card(24 + bw, btn_y, bw, 28, COL_BG_PANEL, COL_CYAN);
-    c.draw_text_centered(24 + bw + bw / 2, btn_y + 10,
-                         g_board_is_18 ? "PING PEER 2.06" : "BOOT FACTORY", COL_CYAN, 1);
+    c.fill_card(24 + bw, btn_y, bw, 26, COL_BG_PANEL, COL_CYAN);
+    c.draw_text_centered(24 + bw + bw / 2, btn_y + 9,
+                         g_board_is_18 ? "SPLASH -> 2.06x2" : "BOOT FACTORY", COL_CYAN, 1);
 }
 
 static void s3_render_frame() {
@@ -1034,7 +1142,6 @@ static void s3_render_frame() {
         if (y0 + bh > footer_y) {
             s3_render_footer_tabs(canvas);
         }
-        // Visual touch feedback ring
         if (g_touch.touched) {
             canvas.draw_circle(g_touch.x, g_touch.y, 12, COL_MINT);
             canvas.fill_circle(g_touch.x, g_touch.y, 3, COL_GOLD);
@@ -1049,13 +1156,13 @@ static void s3_render_frame() {
 // ============================================================
 static void s3_emit_track_event() {
     const S3FavTrack* t = &S3_FAVOURITES[g_s3_track_idx];
-    Serial.printf("{\"event\":\"zoneinn_track\",\"board\":\"%s\",\"playing\":%d,\"idx\":%d,"
+    Serial.printf("{\"event\":\"zoneinn_track\",\"persona\":\"%s\",\"trit\":%d,\"playing\":%d,\"idx\":%d,"
                   "\"slug\":\"%s\",\"title\":\"%s\",\"artist\":\"%s\","
                   "\"bpm\":%u,\"key\":\"%s\",\"qt\":\"%02x\"}\n",
-                  g_board_is_18 ? "ESP32-S3-AMOLED-1.8" : "ESP32-S3-AMOLED-2.06",
+                  g_triad_persona, (int)g_triad_self_pole,
                   g_s3_playing ? 1 : 0, g_s3_track_idx + 1,
                   t->slug, t->title, t->artist, t->bpm, t->key_sig, g_imu.qt_byte);
-    s3_espnow_broadcast(32, 32, 4200);
+    s3_espnow_broadcast(32, 32, 5200);
 }
 
 static void s3_handle_touch() {
@@ -1063,13 +1170,12 @@ static void s3_handle_touch() {
     int H = (int)g_lcd_h;
     int footer_y = H - 52;
 
-    // Continuous touch drag inside Tab 0 (ZEN) injects live ripples into 2D Wave Pool
     if (g_touch.touched && g_s3_active_tab == 0 && g_touch.y > 44 && g_touch.y < footer_y - 38) {
         int wx = ((int)g_touch.x * (WAVE_POOL_N - 4)) / W + 2;
         int wy = (((int)g_touch.y - 44) * (WAVE_POOL_N - 4)) / (footer_y - 82) + 2;
-        s3_wave_pool_splash(wx, wy, 5400, 5);
+        s3_wave_pool_splash(wx, wy, 5800, 5);
         if (g_touch.just_pressed) {
-            s3_espnow_broadcast((uint8_t)wx, (uint8_t)wy, 5400);
+            s3_espnow_broadcast((uint8_t)wx, (uint8_t)wy, 5800);
         }
     }
 
@@ -1077,7 +1183,6 @@ static void s3_handle_touch() {
     uint16_t tx = g_touch.x;
     uint16_t ty = g_touch.y;
 
-    // Bottom Navigation Tab Bar
     if (ty >= footer_y) {
         uint8_t new_tab = (uint8_t)((tx * S3_TAB_COUNT) / W);
         if (new_tab >= S3_TAB_COUNT) new_tab = S3_TAB_COUNT - 1;
@@ -1086,9 +1191,7 @@ static void s3_handle_touch() {
         return;
     }
 
-    // Tab-specific touch zones
     if (g_s3_active_tab == 1) {
-        // Transport buttons (y in 114..148)
         if (ty >= 114 && ty <= 148) {
             if (tx < W / 3) {
                 g_s3_track_idx = (g_s3_track_idx + S3_FAV_COUNT - 1) % S3_FAV_COUNT;
@@ -1104,7 +1207,6 @@ static void s3_handle_touch() {
             }
             return;
         }
-        // Crate list rows (y >= 284)
         if (ty >= 284 && ty < footer_y) {
             int crate_h = (H - 56) - 264;
             int rows    = (crate_h - 24) / 22;
@@ -1133,15 +1235,18 @@ static void s3_handle_touch() {
                 g_s3_channel = (g_s3_channel % S3_MAX_CHANNEL) + 1;
                 esp_wifi_set_channel(g_s3_channel, WIFI_SECOND_CHAN_NONE);
             } else {
-                s3_espnow_broadcast(32, 32, 6000);
-                Serial.printf("{\"capsule_id\":\"omni-zen-s3-%lu\",\"rows\":%u,\"qt\":\"%02x\",\"ssid\":\"%s\"}\n",
-                              (unsigned long)g_s3_total_pkts, g_s3_seam_mat.rows,
-                              g_imu.qt_byte, g_s3_last_ssid);
+                s3_espnow_broadcast(32, 32, 6800);
+                Serial.printf("{\"capsule_id\":\"triad-s3-%lu\",\"persona\":\"%s\",\"trit\":%d,\"qt\":\"%02x\"}\n",
+                              (unsigned long)g_s3_total_pkts, g_triad_persona,
+                              (int)g_triad_self_pole, g_imu.qt_byte);
             }
         }
     } else if (g_s3_active_tab == 4) {
-        if (ty >= footer_y - 48 && ty < footer_y && tx >= W / 2) {
-            if (g_board_is_18) {
+        if (ty >= footer_y - 48 && ty < footer_y) {
+            if (tx < W / 2) {
+                s3_wave_pool_splash(32, 32, 7800, 6);
+                s3_espnow_broadcast(32, 32, 7800);
+            } else if (g_board_is_18) {
                 s3_espnow_broadcast(32, 32, 7200);
                 s3_wave_pool_splash(32, 32, 7200, 6);
             } else {
@@ -1157,7 +1262,8 @@ static void s3_handle_touch() {
 static void s3_handle_serial_command(const char* line) {
     if (strcmp(line, "status") == 0 || strcmp(line, "stats") == 0) {
         const S3FavTrack* t = &S3_FAVOURITES[g_s3_track_idx];
-        Serial.printf("{\"board\":\"%s\",\"persona\":\"%s\",\"lcd\":\"%ux%u\","
+        Serial.printf("{\"board\":\"%s\",\"persona\":\"%s\",\"trit\":%d,\"triad_online\":%u,"
+                      "\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\",\"lcd\":\"%ux%u\","
                       "\"version\":\"" FLUGOS_FULL_VERSION "\","
                       "\"tab\":%u,\"pkts\":%lu,\"mgmt\":%lu,\"ctrl\":%lu,\"data\":%lu,"
                       "\"ch\":%d,\"hop\":%d,\"rssi\":%d,\"ssid\":\"%s\","
@@ -1166,7 +1272,8 @@ static void s3_handle_serial_command(const char* line) {
                       "\"splashes\":%lu,\"peer_rx\":%lu,\"es8311\":%d,"
                       "\"batt_mv\":%u,\"batt_pct\":%u}\n",
                       g_board_is_18 ? "ESP32-S3-Touch-AMOLED-1.8" : "ESP32-S3-Touch-AMOLED-2.06",
-                      g_board_is_18 ? "adaye" : "vaked",
+                      g_triad_persona, (int)g_triad_self_pole, s3_triad_online_count(),
+                      g_s3_mac[0], g_s3_mac[1], g_s3_mac[2], g_s3_mac[3], g_s3_mac[4], g_s3_mac[5],
                       g_lcd_w, g_lcd_h,
                       g_s3_active_tab, (unsigned long)g_s3_total_pkts,
                       (unsigned long)g_s3_mgmt_pkts, (unsigned long)g_s3_ctrl_pkts, (unsigned long)g_s3_data_pkts,
@@ -1181,9 +1288,10 @@ static void s3_handle_serial_command(const char* line) {
         if (tab >= 0 && tab < S3_TAB_COUNT) g_s3_active_tab = (uint8_t)tab;
         Serial.printf("{\"cmd\":\"tab\",\"val\":%u}\n", g_s3_active_tab);
     } else if (strncmp(line, "splash", 6) == 0) {
-        s3_wave_pool_splash(32, 32, 7500, 6);
-        s3_espnow_broadcast(32, 32, 7500);
-        Serial.printf("{\"cmd\":\"splash\",\"splashes\":%lu}\n", (unsigned long)g_wp_splashes);
+        s3_wave_pool_splash(32, 32, 7800, 6);
+        s3_espnow_broadcast(32, 32, 7800);
+        Serial.printf("{\"cmd\":\"splash\",\"persona\":\"%s\",\"splashes\":%lu,\"peer_rx\":%lu}\n",
+                      g_triad_persona, (unsigned long)g_wp_splashes, (unsigned long)g_s3_peer_rx_cnt);
     } else if (strncmp(line, "track ", 6) == 0) {
         int idx = atoi(line + 6) - 1;
         if (idx >= 0 && idx < S3_FAV_COUNT) {
@@ -1255,10 +1363,11 @@ static void s3_amoled_setup() {
     s3_axp2101_poll();
     s3_imu_poll();
 
-    // 6. Initialize ESP32-S3 Wi-Fi in Promiscuous + ESP-NOW Peer Mode
+    // 6. Initialize ESP32-S3 Wi-Fi + Assign Triad Identity ({-1:adaye, 0:vaked, +1:omni})
     WiFi.mode(WIFI_MODE_STA);
     WiFi.disconnect();
     esp_wifi_get_mac(WIFI_IF_STA, g_s3_mac);
+    s3_triad_assign_identity();
 
     if (esp_now_init() == ESP_OK) {
         esp_now_register_recv_cb(s3_espnow_recv_cb);
@@ -1277,26 +1386,27 @@ static void s3_amoled_setup() {
     filt.filter_mask = WIFI_PROMIS_FILTER_MASK_ALL;
     esp_wifi_set_promiscuous_filter(&filt);
     esp_wifi_set_promiscuous(true);
-    esp_wifi_set_channel(g_s3_channel, WIFI_SECOND_CHAN_NONE);
+    esp_wifi_set_channel(S3_MESH_CHANNEL, WIFI_SECOND_CHAN_NONE);
 
-    // 7. Initial central splash + first frame
+    // 7. Initial central splash + broadcast + first frame
     s3_wave_pool_splash(32, 32, 8200, 6);
     s3_step_physics();
+    s3_espnow_broadcast(32, 32, 8200);
     s3_render_frame();
 
     Serial.printf("\r\n");
     Serial.printf("  ╔══════════════════════════════════════════════════════════╗\r\n");
-    Serial.printf("  ║  FLUG-OS {-1, 0, +1}  " FLUGOS_FULL_VERSION "  ULTRA-OMNI-ZEN   ║\r\n");
-    Serial.printf("  ║  Board: %-28s (%ux%u QSPI) ║\r\n",
-                  is_18 ? "ESP32-S3-Touch-AMOLED-1.8" : "ESP32-S3-Touch-AMOLED-2.06",
+    Serial.printf("  ║  FLUG-OS {-1, 0, +1}  " FLUGOS_FULL_VERSION "  {<3,<3,<3}+1->INF ║\r\n");
+    Serial.printf("  ║  Node [%+d] %-6s : %-24s (%ux%u) ║\r\n",
+                  (int)g_triad_self_pole, g_triad_persona,
+                  is_18 ? "ESP32-S3-AMOLED-1.8" : "ESP32-S3-AMOLED-2.06",
                   g_lcd_w, g_lcd_h);
-    Serial.printf("  ║  vaked.dev x 8b-is :: adaye + zoneInn + qwave + NAND     ║\r\n");
     Serial.printf("  ╚══════════════════════════════════════════════════════════╝\r\n");
-    Serial.printf("{\"boot\":\"ok\",\"board\":\"%s\",\"persona\":\"%s\",\"lcd\":\"%ux%u\","
-                  "\"pmic\":%d,\"amoled\":%d,\"imu\":%d,\"es8311\":%d,\"espnow\":%d,"
+    Serial.printf("{\"boot\":\"ok\",\"board\":\"%s\",\"persona\":\"%s\",\"trit\":%d,"
+                  "\"lcd\":\"%ux%u\",\"pmic\":%d,\"amoled\":%d,\"imu\":%d,\"es8311\":%d,\"espnow\":%d,"
                   "\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\"}\r\n",
                   is_18 ? "ESP32-S3-Touch-AMOLED-1.8" : "ESP32-S3-Touch-AMOLED-2.06",
-                  is_18 ? "adaye" : "vaked",
+                  g_triad_persona, (int)g_triad_self_pole,
                   g_lcd_w, g_lcd_h,
                   pmic_ok ? 1 : 0, lcd_ok ? 1 : 0, imu_ok ? 1 : 0,
                   audio_ok ? 1 : 0, g_s3_espnow_ok ? 1 : 0,
@@ -1324,15 +1434,21 @@ static void s3_amoled_loop() {
     }
     last_boot_btn = boot_btn;
 
-    // Channel hopping across 1..13
-    if (g_s3_hopping && (now - last_hop_ms >= 350)) {
+    // Triad-synchronized channel hopping: alternates between S3_MESH_CHANNEL (CH 6)
+    // and sweep channel 1..13 so all 3 nodes continuously exchange ESP-NOW capsules!
+    if (g_s3_hopping && (now - last_hop_ms >= 320)) {
         last_hop_ms = now;
-        g_s3_channel = (g_s3_channel % S3_MAX_CHANNEL) + 1;
-        esp_wifi_set_channel(g_s3_channel, WIFI_SECOND_CHAN_NONE);
-    }
-
-    // Periodic ESP-NOW peer heartbeat every 1.2s
-    if (now - last_peer_ms >= 1200) {
+        g_s3_mesh_slot = !g_s3_mesh_slot;
+        if (g_s3_mesh_slot) {
+            g_s3_channel = S3_MESH_CHANNEL;
+            esp_wifi_set_channel(g_s3_channel, WIFI_SECOND_CHAN_NONE);
+            s3_espnow_broadcast(32, 32, 0);
+        } else {
+            g_s3_scan_ch = (g_s3_scan_ch % S3_MAX_CHANNEL) + 1;
+            g_s3_channel = g_s3_scan_ch;
+            esp_wifi_set_channel(g_s3_channel, WIFI_SECOND_CHAN_NONE);
+        }
+    } else if (!g_s3_hopping && (now - last_peer_ms >= 600)) {
         last_peer_ms = now;
         s3_espnow_broadcast(32, 32, 0);
     }
