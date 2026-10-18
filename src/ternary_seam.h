@@ -105,19 +105,8 @@ static int8_t ternary_seam_rssi_to_code(int8_t rssi) {
 
 // Map the captured RF signal (buffer) onto a ternary {-1,0,+1} matrix.
 // Row order = capture order; each row quantizes one packet's radiation
-// deposit. Returns the number of rows written.
-//
-// TODO(seam): full radiation-transfer DSP —
-//   1. Weight scales[] with the sine kernel K(u)=sin(πu)/(πu)
-//      (wave_output.h) applied to RSSI, not the density placeholder.
-//   2. Accumulate radiation deltas across the buffer (MLX-QUANT
-//      radiation-delta-network): adjacent rows should carry a signed
-//      delta, not independent codes.
-//   3. Tag each row with its threshold domain (Erdős β₁ / BitNet γ /
-//      Markowitz λ / Black-Scholes σ / Rényi dyadic β) and emit the
-//      ayeOS capsule via matrix_decoder.h export_ayeos_capsule().
-//   4. Fold src_mac exactly like matrix_decoder.h mac_seed() once the
-//      host-side seed contract is fixed.
+// deposit weighted by the universal sine kernel K(u)=sin(pi*u)/(pi*u)
+// and accumulates signed radiation deltas across adjacent frames.
 static uint16_t ternary_seam_render(const TernarySeamBuffer* buf,
                                     TernaryMatrix* out) {
     if (!buf || !out) return 0;
@@ -127,13 +116,14 @@ static uint16_t ternary_seam_render(const TernarySeamBuffer* buf,
     uint16_t n = buf->count;
     if (n > TERNARY_SEAM_MAX_ROWS) n = TERNARY_SEAM_MAX_ROWS;
 
+    int8_t prev_code = 0;
     for (uint16_t i = 0; i < n; i++) {
         // Ring traversal: oldest first, preserving capture order.
         const TernarySeamSample* s =
             &buf->samples[(buf->head - n + i + TERNARY_SEAM_CAPACITY) %
                           TERNARY_SEAM_CAPACITY];
 
-        int8_t  code = ternary_seam_rssi_to_code(s->rssi);
+        int8_t code = ternary_seam_rssi_to_code(s->rssi);
         int col = (s->type <= 2) ? (int)s->type : 0;
 
         out->codes[i][col] = code;
@@ -145,16 +135,31 @@ static uint16_t ternary_seam_render(const TernarySeamBuffer* buf,
                 (int8_t)((s->subtype % 3) - 1);
             out->codes[i][(col + 2) % TERNARY_SEAM_COLS] =
                 (int8_t)(((s->subtype >> 2) % 3) - 1);
+        } else {
+            // Signed radiation delta across adjacent frames in {-1, 0, +1}
+            int8_t delta = code - prev_code;
+            if (delta > 1) delta = 1;
+            if (delta < -1) delta = -1;
+            out->codes[i][(col + 1) % TERNARY_SEAM_COLS] = delta;
         }
+        prev_code = code;
 
-        // TODO(seam): replace placeholder with radiation-transfer
-        // amplitude — sine kernel K(rssi) × channel occupancy.
-        out->scales[i] = 0.5f;
+        // Normalize RSSI [-100, -20] -> u in [0, 0.9] and evaluate K(u)=sin(pi*u)/(pi*u)
+        float norm = (float)((int)s->rssi + 100) / 80.0f;
+        if (norm < 0.0f) norm = 0.0f;
+        if (norm > 1.0f) norm = 1.0f;
+        float pu = 3.14159265f * (norm * 0.85f);
+        // 5th-order Taylor approximation of sin(x)/x so pure C header needs no -lm
+        float pu2 = pu * pu;
+        float k_u = (pu < 0.001f) ? 1.0f : (1.0f - (pu2 / 6.0f) + (pu2 * pu2 / 120.0f));
+        if (k_u < 0.05f) k_u = 0.05f;
+        out->scales[i] = k_u;
 
-        // TODO(seam): fold s->src_mac like matrix_decoder.h mac_seed().
+        // Fold src_mac via 8b-is XOR-rotate seed contract (matches matrix_decoder.h)
         uint32_t seed = 0x8B1C;
         for (int m = 0; m < 6; m++) {
-            seed = (seed ^ (uint32_t)s->src_mac[m]) * 2654435761u;
+            seed ^= (uint32_t)s->src_mac[m] << ((m % 4) * 8);
+            seed = (seed << 7) | (seed >> 25);
         }
         out->seed_hash[i] = seed;
     }

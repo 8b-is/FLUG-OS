@@ -9,6 +9,17 @@
  * For educational/defensive use on your own networks only.
  */
 
+#ifdef FLUGOS_S3_AMOLED
+#include "s3_amoled_app.h"
+
+void setup() {
+    s3_amoled_setup();
+}
+
+void loop() {
+    s3_amoled_loop();
+}
+#else
 #include <ESP8266WiFi.h>
 
 // ============================================================
@@ -378,3 +389,4 @@ void loop() {
 
     yield();
 }
+#endif /* FLUGOS_S3_AMOLED */

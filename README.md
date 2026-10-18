@@ -20,25 +20,61 @@
 |  PACKET TYPES : [BEACON] [PROBE-REQ] [DATA-ACK] [EAPOL] [DEAUTH]     |
 |  SAMPLING     : Promiscuous IQ Waveform Captures @ 802.11b/g/n       |
 +----------------------------------------------------------------------+
-|  TARGET BOARD : Flipper Zero WiFi Devboard v1 (ESP8285)              |
-|  SYSTEM CORE  : FLUG-OS Real-Time Kernel + Wave Engine v0.3.0        |
+|  TARGET BOARDS: Waveshare ESP32-S3-Touch-AMOLED-2.06 (410x502 QSPI)  |
+|                 Flipper Zero WiFi Devboard v1 (ESP8285)              |
+|  SYSTEM CORE  : FLUG-OS Real-Time Kernel + Wave Engine v0.4.0        |
 |  SIGNING      : ML-DSA-65 + SLH-DSA post-quantum (NIST FIPS 204/205) |
 +----------------------------------------------------------------------+
 
 
-**FLUG-OS{-1,0,+1}** — Fluid Operating System for the **Flipper Zero WiFi Module v1** (ESP8285).
+**FLUG-OS{-1,0,+1}** — Fluid Operating System for the **Waveshare ESP32-S3-Touch-AMOLED-2.06** (`410 × 502` QSPI AMOLED, `FT3168` capacitive touch, `QMI8658` 6-axis IMU, `AXP2101` PMIC) and the **Flipper Zero WiFi Module v1** (`ESP8285`).
 Captures 802.11 frames in promiscuous mode, streams packet features as numerical wave data
-through the universal sine kernel K(u)=sin(πu)/(πu). Every WiFi packet becomes a musical note,
-a ternary matrix row, or a spectral analysis point.
+through the universal sine kernel K(u)=sin(πu)/(πu), and renders a live 4-tab Sovereign Constellation Cockpit (`RADIO`, `802.11`, `NAND`, `QWAVE`) on the 2.06" AMOLED display.
 
-Aligned with **axiomquant.org** — five threshold domains:
+Aligned with **axiomquant.org** & **vaked.dev × 8b-is** — five threshold domains:
 Erdős β₁ · BitNet ternary γ · Markowitz λ · Black-Scholes σ · Rényi dyadic β.
 
 Signed with **ML-DSA-65 + SLH-DSA** post-quantum signatures (NIST FIPS 203/204/205).
 
 **Roadmap:** https://github.com/8b-is/FLUG-OS/blob/main/ROADMAP.md — target v1.4.2 parity with MLX-QUANT.
 
-## Quick start — 3 minutes
+## ESP32-S3-Touch-AMOLED-2.06 Constellation Cockpit (`v0.4.0`)
+
+Evolving `vaked.dev` (`zoneInn` / `radio.vaked.dev`, `ultrawhale-oscillator`, `qwave` `sphered` / `quanttern`) directly onto the **Waveshare ESP32-S3-Touch-AMOLED-2.06**:
+
+| Subsystem | Hardware IC & Bus | GPIO / Address | Function in FLUG-OS v0.4.0 |
+|-----------|-------------------|----------------|----------------------------|
+| **AMOLED Display** | `SH8601 / CO5300` (`410×502` QSPI, `x_gap=0x16`) | `CS=12, PCLK=11, D0..D3=4..7, RST=8, TE=13` | 26-row DMA band rasterizer (`S3Canvas`) at 40 MHz QSPI in Constellation Ink |
+| **Power / PMIC** | `AXP2101` on `I2C_NUM_0` | `SDA=15, SCL=14` @ `0x34` | Enables `DCDC1` & `ALDO1..4` 3.3V display/sensor rails + battery mV/% telemetry |
+| **Capacitive Touch** | `FT3168` on `I2C_NUM_0` | `SDA=15, SCL=14` @ `0x38` (`RST=9, INT=38`) | Interactive 4-tab navigation, track crate selection, channel hop & dual-boot control |
+| **6-Axis IMU** | `QMI8658` on `I2C_NUM_0` | `SDA=15, SCL=14` @ `0x6B` | Real-time 3D Accel/Gyro → `qwave` `QuantTern` 6-bit VAD affect (`qt:xx`) & Lissajous tilt |
+| **RTC** | `PCF85063` on `I2C_NUM_0` | `SDA=15, SCL=14` @ `0x51` | Sovereign witness timestamping |
+
+### Four Interactive AMOLED Views
+
+1. **`[0] RADIO` (`ZONEINN · RADIO.VAKED.DEV`)**: Interactive **14 Favourite Musics Crate** (`Innerbloom`, `Mahakala`, `Take Five`, `So What`, `Time`, `Clair de Lune`, `Gymnopédie No. 1`, `Golden Ratio 432×φ`, `Beethoven 5th`, `Ode to Joy`, `Für Elise`, `Pachelbel's Canon`, `Midnight Sovereign`, `Ultrawhale NAND Groove`) + live 8-band Ternary Harmonic Equalizer (`{-1, 0, +1}`).
+2. **`[1] 802.11` (`FLUG-OS · PACKET-WAVE SAMPLER`)**: Live 13-channel promiscuous RSSI spectrum analyzer, AxiomQuant `K(u) = sin(πu)/(πu)` oscilloscope trace, and `64×3` `TernarySeam` radiation matrix.
+3. **`[2] NAND` (`ULTRAWHALE · NAND × IMU`)**: Live 7-stage cross-coupled ternary NAND ring oscillator (`peetpedro/ultrawhale-oscillator`) + QMI8658 IMU-tilted 2D Lissajous harmonic phase portrait.
+4. **`[3] QWAVE` (`SPHERED · SOVEREIGN CORE`)**: `<(? admit ~ transform ! verify @ attribute > commit)>` `#Commit = #ValidWitness` 5-stage witness badge + Dual-Boot Partition Switcher (`OTA_0: FLUG-OS v0.4.0` ↔ `FACTORY: ESP-Brookesia` preserved at `0x100000`).
+
+### Build, Flash & Bridge (ESP32-S3 AMOLED)
+
+```bash
+# Build ESP32-S3 AMOLED firmware (.pio/build/esp32s3_amoled/firmware.bin)
+pio run -e esp32s3_amoled
+
+# Dual-boot flash to ota_0 (0x00a00000), keeping factory (0x00100000) intact
+esptool --chip esp32s3 --port /dev/cu.usbmodem2101 --baud 921600 \
+  write-flash --flash-mode qio --flash-freq 80m --flash-size 32MB \
+  0x00a00000 .pio/build/esp32s3_amoled/firmware.bin
+
+# Query live telemetry / switch tabs / sync with zoneInn Bluetooth playback
+uv run --with pyserial python bridge/s3_amoled_bridge.py --status
+uv run --with pyserial python bridge/s3_amoled_bridge.py --track 8
+uv run --with pyserial python bridge/s3_amoled_bridge.py --listen --bt "Soundcore Select 4"
+```
+
+## Quick start — Flipper Zero WiFi v1 (3 minutes)
 
 ### 1. What you need
 
@@ -266,6 +302,7 @@ All ternary. All aligned. {-1, 0, +1}
 ## Build
 
 ```bash
+pio run -e esp32s3_amoled             # Waveshare ESP32-S3-Touch-AMOLED-2.06 (410x502 QSPI)
 pio run -e esp8285                    # Flipper Zero WiFi v1
 pio run -e generic                    # Generic ESP8266
 pio run -e debug                      # Debug build with serial output
@@ -276,15 +313,19 @@ pio run -e debug                      # Debug build with serial output
 ```
 FLUG-OS/
 ├── src/
-│   ├── flugos.cpp           # Main firmware (500 lines)
+│   ├── flugos.cpp           # Main firmware entrypoint (ESP8285 + ESP32-S3 AMOLED)
+│   ├── s3_amoled_hal.h      # SH8601 QSPI AMOLED, AXP2101 PMIC, FT3168 Touch, QMI8658 IMU, S3Canvas
+│   ├── s3_amoled_app.h      # 4-Tab Sovereign Cockpit (RADIO / 802.11 / NAND / QWAVE)
+│   ├── ternary_seam.h       # Radiation-transfer ternary matrix seam + sine kernel weighting
 │   ├── wave_output.h        # Sine kernel wave sonification
 │   ├── matrix_decoder.h     # 1:1 packet→ternary matrix decoder
 │   └── version.h            # Semantic versioning + CI commit
 ├── bridge/
+│   ├── s3_amoled_bridge.py  # ESP32-S3 AMOLED <-> zoneInn & Mac host serial bridge
 │   └── wave_bridge.py       # Serial → HTTP/MIDI wave bridge
 ├── .github/workflows/
 │   └── ci.yml               # Blacksmith CI + PQC signing
-├── platformio.ini           # Build config
+├── platformio.ini           # Build config (esp8285, generic, debug, esp32s3_amoled)
 └── README.md                # This file
 ```
 

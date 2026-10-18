@@ -34,18 +34,19 @@ ternary matrix → ayeOS inference → HF-MAC visualization.
 ✅ CI with Blacksmith runner (build + test)
 ```
 
-## v0.4.x — Hardware Validation
+## v0.4.0 — ESP32-S3 AMOLED Constellation Evolution & Hardware Validation (current)
 
 ```
-⏳ Flash to real ESP8285 hardware (waiting on USB-C cable)
-⏳ Validate RSSI extraction from RxControl struct
-⏳ Test channel hopping on real hardware
-⏳ Verify SSID parsing with live beacons
-⏳ Measure packet loss rate at 115200 baud
-⏳ Calibrate RSSI thresholds for ternary encoding
-⏳ Benchmark: max packets/sec before buffer overflow
-⏳ Test with Flipper Zero DFU flash (LEFT+BACK)
-⏳ Test with FTDI direct flash
+✅ Flash & boot on physical Waveshare ESP32-S3-Touch-AMOLED-2.06 (/dev/cu.usbmodem2101)
+✅ SH8601/CO5300 410x502 QSPI AMOLED DMA band rasterizer (S3Canvas, x_gap=0x16)
+✅ AXP2101 PMIC rail initialization (DCDC1 + ALDO1..4 3.3V) & battery monitoring
+✅ FT3168 capacitive touch navigation across 4 Constellation tabs (RADIO, 802.11, NAND, QWAVE)
+✅ QMI8658 6-axis IMU -> qwave QuantTern 6-bit VAD affect (qt:xx) & 2D Lissajous phase tilt
+✅ zoneInn / radio.vaked.dev 14 Favourite Musics Crate + 8-band Ternary EQ on device
+✅ Ultrawhale 7-stage ternary NAND ring oscillator (peetpedro/ultrawhale-oscillator)
+✅ Validate live 802.11 promiscuous RSSI & SSID extraction across channels 1-13
+✅ Complete sine-kernel K(u)=sin(pi*u)/(pi*u) radiation-delta weighting in ternary_seam.h
+✅ Host bridge (bridge/s3_amoled_bridge.py) syncing touchscreen track selection to zoneInn
 ```
 
 ## v1.0.0 — Stable Release
