@@ -1,27 +1,21 @@
 /*
- * FLUG-OS — Waveshare ESP32-S3-Touch-AMOLED-2.06 Hardware Abstraction Layer
- * Sovereign Constellation Hardware Target (vaked.dev × 8b-is)
+ * FLUG-OS — Waveshare ESP32-S3-Touch-AMOLED-1.8 & 2.06 Unified HAL
+ * ULTRA-OMNI-ZEN Sovereign Constellation Hardware Target (vaked.dev × 8b-is)
  *
- * Exact Board Pinout (verified from factory firmware & Waveshare BSP):
- *   Display: SH8601 / CO5300 2.06" 410x502 QSPI AMOLED (x_gap = 0x16 = 22)
- *     LCD_CS   = GPIO 12
- *     LCD_PCLK = GPIO 11
- *     LCD_D0   = GPIO 4
- *     LCD_D1   = GPIO 5
- *     LCD_D2   = GPIO 6
- *     LCD_D3   = GPIO 7
- *     LCD_RST  = GPIO 8
- *     LCD_TE   = GPIO 13
- *   Shared I2C Bus (I2C_NUM_0):
- *     I2C_SCL  = GPIO 14
- *     I2C_SDA  = GPIO 15
- *     AXP2101 PMIC  @ 0x34 (ALDO1..4 3.3V display/peripheral power rails)
- *     FT3168 Touch  @ 0x38 (TP_RST = GPIO 9, TP_INT = GPIO 38)
- *     QMI8658 IMU   @ 0x6B (6-axis Accel + Gyro)
- *     PCF85063 RTC  @ 0x51
- *     ES8311 Codec  @ 0x18
- *   Buttons:
- *     BOOT_BTN = GPIO 0 (active low)
+ * Runtime Auto-Detection via Shared I2C Bus (SDA=15, SCL=14 @ 400kHz):
+ *   1. Waveshare ESP32-S3-Touch-AMOLED-1.8 (detected via TCA9554 @ 0x20):
+ *      - SH8601 QSPI AMOLED: 368x448 (x_gap = 0, y_gap = 0)
+ *      - LCD_CS=12, LCD_PCLK=11, LCD_D0=4, LCD_D1=5, LCD_D2=6, LCD_D3=7
+ *      - TCA9554 I/O Expander @ 0x20 (pins 0..2 reset Display, Touch, Audio; EXIO7=SD CS)
+ *      - FT3168 Touch @ 0x38 (TP_INT = GPIO 21)
+ *      - ES8311 Audio Codec @ 0x18 (MCLK=16, BCLK=9, LRCLK=45, DOUT=8, DIN=10, PA=46)
+ *      - QMI8658 6-Axis IMU @ 0x6B, AXP2101 PMIC @ 0x34, PCF85063 RTC @ 0x51
+ *
+ *   2. Waveshare ESP32-S3-Touch-AMOLED-2.06 (no TCA9554 @ 0x20):
+ *      - SH8601 / CO5300 QSPI AMOLED: 410x502 (x_gap = 0x16 = 22)
+ *      - LCD_CS=12, LCD_PCLK=11, LCD_D0..D3=4..7, LCD_RST=8, LCD_TE=13
+ *      - FT3168 Touch @ 0x38 (TP_RST = GPIO 9, TP_INT = GPIO 38)
+ *      - QMI8658 6-Axis IMU @ 0x6B, AXP2101 PMIC @ 0x34, PCF85063 RTC @ 0x51, ES8311 @ 0x18
  */
 
 #ifndef FLUGOS_S3_AMOLED_HAL_H
@@ -34,13 +28,18 @@
 #include "esp_heap_caps.h"
 
 // ============================================================
-// Display & Pin Constants
+// Maximum / Dynamic Display Geometry & Pin Constants
 // ============================================================
-#define AMOLED_W            410
-#define AMOLED_H            502
-#define AMOLED_X_GAP        0x16   // 22-column internal GRAM offset on 2.06" CO5300/SH8601
-#define AMOLED_Y_GAP        0x00
-#define AMOLED_BAND_H       26     // Even height (y0 even, y1-1 odd) -> 21,320 bytes DMA RAM
+#define AMOLED_MAX_W        410
+#define AMOLED_MAX_H        502
+#define AMOLED_BAND_H       28     // Even band height (448 = 16*28; 502 = 17*28 + 26)
+#define QSPI_CHUNK_PIXELS   1024   // Matches baye-rust 1024-pixel QSPI DMA chunk size
+
+// Runtime-detected display geometry (defaults to 1.8" 368x448, updated at boot)
+static bool     g_board_is_18 = true;
+static uint16_t g_lcd_w       = 368;
+static uint16_t g_lcd_h       = 448;
+static uint16_t g_lcd_x_gap   = 0;
 
 #define PIN_LCD_CS          12
 #define PIN_LCD_PCLK        11
@@ -48,19 +47,23 @@
 #define PIN_LCD_D1          5
 #define PIN_LCD_D2          6
 #define PIN_LCD_D3          7
-#define PIN_LCD_RST         8
+#define PIN_LCD_RST_206     8
 #define PIN_LCD_TE          13
 
 #define PIN_I2C_SCL         14
 #define PIN_I2C_SDA         15
-#define PIN_TP_RST          9
-#define PIN_TP_INT          38
+#define PIN_TP_RST_206      9
+#define PIN_TP_INT_18       21
+#define PIN_TP_INT_206      38
+#define PIN_SPEAKER_EN      46
 #define PIN_BOOT_BTN        0
 
+#define I2C_ADDR_TCA9554    0x20
 #define I2C_ADDR_AXP2101    0x34
 #define I2C_ADDR_FT3168     0x38
 #define I2C_ADDR_QMI8658    0x6B
 #define I2C_ADDR_PCF85063   0x51
+#define I2C_ADDR_ES8311     0x18
 
 // ============================================================
 // Constellation Ink Palette (RGB565 Big-Endian for SH8601 DMA)
@@ -73,6 +76,7 @@ static inline uint16_t rgb565_be(uint8_t r, uint8_t g, uint8_t b) {
 }
 
 #define COL_BG          rgb565_be(5,   6,  10)   // #05060a Obsidian Ink
+#define COL_VOID        rgb565_be(0,   0,   0)   // #000000 True AMOLED Black
 #define COL_BG_ELEV     rgb565_be(11, 14,  23)   // #0b0e17 Elevated Card
 #define COL_BG_PANEL    rgb565_be(17, 22,  36)   // #111624 Highlight Panel
 #define COL_BORDER      rgb565_be(32, 42,  68)   // #202a44 Hairline Border
@@ -80,6 +84,7 @@ static inline uint16_t rgb565_be(uint8_t r, uint8_t g, uint8_t b) {
 #define COL_TEXT        rgb565_be(236, 242, 255) // #ecf2ff Crisp White
 #define COL_SUBTEXT     rgb565_be(138, 152, 184) // #8a98b8 Muted Slate
 #define COL_DIM         rgb565_be(76,  88, 118)  // #4c5876 Dim Label
+#define COL_AMBER_INFO  rgb565_be(140, 102, 38)  // #8c6626 Orbiting Info Ring Amber
 #define COL_MINT        rgb565_be(98,  230, 201) // #62e6c9 Sovereign Mint (+1)
 #define COL_MINT_DARK   rgb565_be(22,  68,  60)  // #16443c Mint Fill
 #define COL_GOLD        rgb565_be(232, 176, 92)  // #e8b05c Harmonic Gold (0)
@@ -93,6 +98,11 @@ static inline uint16_t rgb565_be(uint8_t r, uint8_t g, uint8_t b) {
 // ============================================================
 // I2C Helper Routines
 // ============================================================
+static bool s3_i2c_probe(uint8_t addr) {
+    Wire.beginTransmission(addr);
+    return (Wire.endTransmission() == 0);
+}
+
 static bool s3_i2c_write8(uint8_t addr, uint8_t reg, uint8_t val) {
     Wire.beginTransmission(addr);
     Wire.write(reg);
@@ -119,6 +129,89 @@ static uint8_t s3_i2c_read8(uint8_t addr, uint8_t reg, uint8_t fallback = 0) {
 }
 
 // ============================================================
+// TCA9554 I/O Expander (0x20) — Present on ESP32-S3-Touch-AMOLED-1.8
+// Toggles pins 0..2 LOW -> HIGH to reset SH8601, FT3168, and ES8311
+// ============================================================
+static bool s3_tca9554_init_and_reset() {
+    if (!s3_i2c_probe(I2C_ADDR_TCA9554)) {
+        g_board_is_18 = false;
+        g_lcd_w       = 410;
+        g_lcd_h       = 502;
+        g_lcd_x_gap   = 0x16;
+        return false;
+    }
+    g_board_is_18 = true;
+    g_lcd_w       = 368;
+    g_lcd_h       = 448;
+    g_lcd_x_gap   = 0;
+    // Set pins 0..2 as outputs (0 = output, 1 = input -> 0xF8 = 0b11111000)
+    if (!s3_i2c_write8(I2C_ADDR_TCA9554, 0x03, 0xF8)) return false;
+    // Assert reset (drive pins 0..2 LOW)
+    s3_i2c_write8(I2C_ADDR_TCA9554, 0x01, 0x00);
+    delay(20);
+    // Release reset (drive pins 0..2 HIGH -> 0x07 = 0b00000111)
+    s3_i2c_write8(I2C_ADDR_TCA9554, 0x01, 0x07);
+    delay(50);
+    return true;
+}
+
+// ============================================================
+// ES8311 Audio Codec (0x18) — Full ADF Init Sequence (from baye-rust)
+// ============================================================
+static bool g_es8311_ok = false;
+
+static bool s3_es8311_init() {
+    if (!s3_i2c_probe(I2C_ADDR_ES8311)) {
+        g_es8311_ok = false;
+        return false;
+    }
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x00, 0x1F);
+    delay(20);
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x00, 0x00);
+    delay(20);
+
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x44, 0x08);
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x44, 0x08);
+
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x01, 0x30);
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x02, 0x00);
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x03, 0x10);
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x04, 0x10);
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x05, 0x04);
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x06, 0x01);
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x07, 0x00);
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x08, 0xFF);
+
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x09, 0x00);
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x0A, 0x00);
+
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x0B, 0x00);
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x0C, 0x00);
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x10, 0x1F);
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x11, 0x7F);
+    delay(50);
+
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x17, 0xBF);
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x0E, 0x02);
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x12, 0x00);
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x14, 0xBF);
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x0D, 0x01);
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x15, 0x40);
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x1B, 0x05);
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x1C, 0x6A);
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x37, 0x08);
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x45, 0x00);
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x44, 0x58);
+    delay(30);
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x32, 0xD9); // 85% DAC volume
+
+    pinMode(PIN_SPEAKER_EN, OUTPUT);
+    digitalWrite(PIN_SPEAKER_EN, HIGH);
+    g_es8311_ok = true;
+    return true;
+}
+
+// ============================================================
 // AXP2101 Power Management IC (0x34)
 // Enables 3.3V rails for AMOLED, Touch, Audio & IMU + reads Battery
 // ============================================================
@@ -130,7 +223,7 @@ typedef struct {
     uint8_t  batt_pct;
 } S3PowerState;
 
-static S3PowerState g_power = {false, true, false, 4120, 95};
+static S3PowerState g_power = {false, true, false, 4120, 100};
 
 static bool s3_axp2101_init() {
     uint8_t chip_id = 0;
@@ -140,7 +233,6 @@ static bool s3_axp2101_init() {
     }
     g_power.present = true;
 
-    // Power-off & key hold config (from Waveshare 2.06 BSP)
     s3_i2c_write8(I2C_ADDR_AXP2101, 0x22, 0b00000110);
     s3_i2c_write8(I2C_ADDR_AXP2101, 0x27, 0x10);
 
@@ -148,20 +240,18 @@ static bool s3_axp2101_init() {
     s3_i2c_write8(I2C_ADDR_AXP2101, 0x80, 0x01);
     s3_i2c_write8(I2C_ADDR_AXP2101, 0x82, (3300 - 1500) / 100);
 
-    // Set ALDO1, ALDO2, ALDO3, ALDO4 = 3.3V (step = 100mV from 500mV)
+    // Set ALDO1, ALDO2, ALDO3, ALDO4 = 3.3V
     uint8_t aldo_3v3 = (3300 - 500) / 100; // 0x1C
     s3_i2c_write8(I2C_ADDR_AXP2101, 0x92, aldo_3v3);
     s3_i2c_write8(I2C_ADDR_AXP2101, 0x93, aldo_3v3);
     s3_i2c_write8(I2C_ADDR_AXP2101, 0x94, aldo_3v3);
     s3_i2c_write8(I2C_ADDR_AXP2101, 0x95, aldo_3v3);
 
-    // Enable ALDO1..4 & BLDO1..2
     uint8_t ldo_en = s3_i2c_read8(I2C_ADDR_AXP2101, 0x90, 0x00);
     s3_i2c_write8(I2C_ADDR_AXP2101, 0x90, ldo_en | 0x3F);
 
-    // Enable battery voltage & system ADC channels
+    // Enable battery voltage & system ADC channels (0x30 = 0x03 / 0x3F)
     s3_i2c_write8(I2C_ADDR_AXP2101, 0x30, 0x3F);
-    // Charger current 200mA, CV 4.2V
     s3_i2c_write8(I2C_ADDR_AXP2101, 0x62, 0x08);
     s3_i2c_write8(I2C_ADDR_AXP2101, 0x64, 0x03);
     return true;
@@ -176,7 +266,7 @@ static void s3_axp2101_poll() {
 
     uint8_t vbuf[2] = {0};
     if (s3_i2c_read_bytes(I2C_ADDR_AXP2101, 0x34, vbuf, 2)) {
-        uint16_t mv = ((uint16_t)(vbuf[0] & 0x1F) << 8) | vbuf[1];
+        uint16_t mv = ((uint16_t)(vbuf[0] & 0x3F) << 8) | vbuf[1];
         if (mv >= 2500 && mv <= 4500) {
             g_power.batt_mv = mv;
         }
@@ -207,12 +297,16 @@ static uint16_t s_touch_start_y = 0;
 static unsigned long s_last_tap_ms = 0;
 
 static void s3_touch_init() {
-    pinMode(PIN_TP_RST, OUTPUT);
-    pinMode(PIN_TP_INT, INPUT_PULLUP);
-    digitalWrite(PIN_TP_RST, LOW);
-    delay(15);
-    digitalWrite(PIN_TP_RST, HIGH);
-    delay(50);
+    if (g_board_is_18) {
+        pinMode(PIN_TP_INT_18, INPUT_PULLUP);
+    } else {
+        pinMode(PIN_TP_RST_206, OUTPUT);
+        pinMode(PIN_TP_INT_206, INPUT_PULLUP);
+        digitalWrite(PIN_TP_RST_206, LOW);
+        delay(15);
+        digitalWrite(PIN_TP_RST_206, HIGH);
+        delay(50);
+    }
 }
 
 static void s3_touch_poll() {
@@ -229,13 +323,13 @@ static void s3_touch_poll() {
     }
     uint16_t tx = ((uint16_t)(buf[1] & 0x0F) << 8) | buf[2];
     uint16_t ty = ((uint16_t)(buf[3] & 0x0F) << 8) | buf[4];
-    if (tx >= AMOLED_W) tx = AMOLED_W - 1;
-    if (ty >= AMOLED_H) ty = AMOLED_H - 1;
+    if (tx >= g_lcd_w) tx = g_lcd_w - 1;
+    if (ty >= g_lcd_h) ty = g_lcd_h - 1;
 
     if (!g_touch.touched) {
         s_touch_start_x = tx;
         s_touch_start_y = ty;
-        if (millis() - s_last_tap_ms > 160) {
+        if (millis() - s_last_tap_ms > 140) {
             g_touch.just_pressed = true;
             s_last_tap_ms = millis();
         }
@@ -249,12 +343,14 @@ static void s3_touch_poll() {
 
 // ============================================================
 // QMI8658 6-Axis IMU (0x6B) + PCF85063 RTC (0x51)
-// Drives QuantTern {-1, 0, +1} VAD affect trits & Lissajous tilt
+// Drives QuantTern {-1, 0, +1} VAD affect trits, Sickness & Tilt
 // ============================================================
 typedef struct {
     bool    present;
     float   ax, ay, az;      // g
     float   gx, gy, gz;      // deg/s
+    float   gyro_mag;        // total angular speed (deg/s)
+    float   sickness;        // 0.0 (zen calm) .. 1.0 (chaotic motion)
     int8_t  trit_v;          // Valence trit {-1, 0, +1}
     int8_t  trit_a;          // Arousal trit {-1, 0, +1}
     int8_t  trit_d;          // Dominance trit {-1, 0, +1}
@@ -262,7 +358,10 @@ typedef struct {
     uint8_t rtc_h, rtc_m, rtc_s;
 } S3ImuState;
 
-static S3ImuState g_imu = {false, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1, 0, 1, 0x26, 4, 20, 0};
+static S3ImuState g_imu = {
+    false, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+    1, 0, 1, 0x26, 6, 58, 0
+};
 
 static inline uint8_t s3_trit_bits(int8_t t) {
     if (t > 0) return 0b10;
@@ -277,7 +376,7 @@ static bool s3_imu_init() {
         return false;
     }
     g_imu.present = true;
-    // CTRL1: address auto-increment + little-endian serial read
+    // CTRL1: address auto-increment (0x40) | little-endian (0x60)
     s3_i2c_write8(I2C_ADDR_QMI8658, 0x02, 0x60);
     // CTRL2: Accel +-8g, 250Hz
     s3_i2c_write8(I2C_ADDR_QMI8658, 0x03, 0x23);
@@ -303,7 +402,6 @@ static void s3_imu_poll() {
             int16_t rgy = (int16_t)((raw[9] << 8) | raw[8]);
             int16_t rgz = (int16_t)((raw[11] << 8) | raw[10]);
 
-            // +-8g -> 4096 LSB/g; +-512dps -> 64 LSB/dps
             g_imu.ax = g_imu.ax * 0.7f + ((float)rax / 4096.0f) * 0.3f;
             g_imu.ay = g_imu.ay * 0.7f + ((float)ray / 4096.0f) * 0.3f;
             g_imu.az = g_imu.az * 0.7f + ((float)raz / 4096.0f) * 0.3f;
@@ -311,16 +409,26 @@ static void s3_imu_poll() {
             g_imu.gy = (float)rgy / 64.0f;
             g_imu.gz = (float)rgz / 64.0f;
 
-            float gyro_mag = fabsf(g_imu.gx) + fabsf(g_imu.gy) + fabsf(g_imu.gz);
+            float gmag = sqrtf(g_imu.gx * g_imu.gx + g_imu.gy * g_imu.gy + g_imu.gz * g_imu.gz);
+            g_imu.gyro_mag = gmag;
+
+            // Motion sickness / zen coherence (matches baye-rust thresholds)
+            if (gmag > 80.0f) {
+                g_imu.sickness += 0.035f;
+                if (g_imu.sickness > 1.0f) g_imu.sickness = 1.0f;
+            } else if (gmag < 26.0f) {
+                g_imu.sickness -= 0.025f;
+                if (g_imu.sickness < 0.0f) g_imu.sickness = 0.0f;
+            }
+
             g_imu.trit_v = (g_imu.ax > 0.18f) ? +1 : ((g_imu.ax < -0.18f) ? -1 : 0);
-            g_imu.trit_a = (gyro_mag > 35.0f) ? +1 : ((gyro_mag < 8.0f) ? -1 : 0);
+            g_imu.trit_a = (gmag > 35.0f) ? +1 : ((gmag < 8.0f) ? -1 : 0);
             g_imu.trit_d = (g_imu.az > 0.35f) ? +1 : ((g_imu.az < -0.35f) ? -1 : 0);
             g_imu.qt_byte = (uint8_t)((s3_trit_bits(g_imu.trit_v) << 4) |
                                       (s3_trit_bits(g_imu.trit_a) << 2) |
                                        s3_trit_bits(g_imu.trit_d));
         }
     }
-    // Read PCF85063 RTC time registers 0x04..0x06
     uint8_t rbuf[3] = {0};
     if (s3_i2c_read_bytes(I2C_ADDR_PCF85063, 0x04, rbuf, 3)) {
         g_imu.rtc_s = bcd2dec(rbuf[0] & 0x7F);
@@ -330,53 +438,101 @@ static void s3_imu_poll() {
 }
 
 // ============================================================
-// SH8601 / CO5300 QSPI AMOLED Driver (410x502, SPI2_HOST QSPI DMA)
+// SH8601 / CO5300 QSPI AMOLED Driver (baye-rust + Waveshare BSP parity)
+// Manual CS (GPIO 12) + 1024-pixel QSPI DMA chunk streaming
 // ============================================================
 static spi_device_handle_t s_amoled_spi = NULL;
 static uint16_t* s_band_buf = NULL;
+static bool      s_first_chunk = true;
 
-static void sh8601_tx_param(uint8_t cmd, const uint8_t* data, size_t len) {
-    if (!s_amoled_spi) return;
-    spi_transaction_t t;
-    memset(&t, 0, sizeof(t));
-    t.flags = 0; // 1-line SPI for command, address, and parameter bytes
-    t.cmd   = 0x02;
-    t.addr  = ((uint32_t)cmd) << 8;
-    t.length = len * 8;
-    t.tx_buffer = (len > 0) ? data : NULL;
-    spi_device_polling_transmit(s_amoled_spi, &t);
+static inline void sh8601_cs_low() {
+    gpio_set_level((gpio_num_t)PIN_LCD_CS, 0);
 }
 
-static void sh8601_tx_color(const void* pixels, size_t byte_len) {
-    if (!s_amoled_spi || byte_len == 0) return;
-    spi_transaction_t t;
-    memset(&t, 0, sizeof(t));
-    // 1-line SPI for 0x32002C00 command header, 4-line QSPI (QIO) for pixel payload
-    t.flags     = SPI_TRANS_MODE_QIO;
-    t.cmd       = 0x32;
-    t.addr      = 0x002C00;
-    t.length    = byte_len * 8;
-    t.tx_buffer = pixels;
-    spi_device_polling_transmit(s_amoled_spi, &t);
+static inline void sh8601_cs_high() {
+    gpio_set_level((gpio_num_t)PIN_LCD_CS, 1);
+}
+
+static void sh8601_write_cmd(uint8_t cmd) {
+    if (!s_amoled_spi) return;
+    sh8601_cs_low();
+    spi_transaction_ext_t tran;
+    memset(&tran, 0, sizeof(tran));
+    tran.base.flags = SPI_TRANS_MULTILINE_CMD | SPI_TRANS_MULTILINE_ADDR;
+    tran.base.cmd   = 0x02;
+    tran.base.addr  = ((uint64_t)cmd) << 8;
+    tran.base.length = 0;
+    spi_device_polling_transmit(s_amoled_spi, &tran.base);
+    sh8601_cs_high();
+}
+
+static void sh8601_write_cmd_data(uint8_t cmd, uint8_t data) {
+    if (!s_amoled_spi) return;
+    sh8601_cs_low();
+    spi_transaction_ext_t tran;
+    memset(&tran, 0, sizeof(tran));
+    tran.base.flags = SPI_TRANS_USE_TXDATA | SPI_TRANS_MULTILINE_CMD | SPI_TRANS_MULTILINE_ADDR;
+    tran.base.cmd   = 0x02;
+    tran.base.addr  = ((uint64_t)cmd) << 8;
+    tran.base.tx_data[0] = data;
+    tran.base.length = 8;
+    spi_device_polling_transmit(s_amoled_spi, &tran.base);
+    sh8601_cs_high();
+}
+
+static void sh8601_write_cmd_bytes(uint8_t cmd, const uint8_t* data, size_t len) {
+    if (!s_amoled_spi) return;
+    if (len == 0) {
+        sh8601_write_cmd(cmd);
+        return;
+    }
+    if (len == 1) {
+        sh8601_write_cmd_data(cmd, data[0]);
+        return;
+    }
+    sh8601_cs_low();
+    spi_transaction_ext_t tran;
+    memset(&tran, 0, sizeof(tran));
+    tran.base.flags = SPI_TRANS_USE_TXDATA | SPI_TRANS_MULTILINE_CMD | SPI_TRANS_MULTILINE_ADDR;
+    tran.base.cmd   = 0x02;
+    tran.base.addr  = ((uint64_t)cmd) << 8;
+    for (size_t i = 0; i < len && i < 4; i++) {
+        tran.base.tx_data[i] = data[i];
+    }
+    tran.base.length = len * 8;
+    spi_device_polling_transmit(s_amoled_spi, &tran.base);
+    sh8601_cs_high();
+}
+
+static void sh8601_write_cmd_data32(uint8_t cmd, uint16_t d1, uint16_t d2) {
+    uint8_t buf[4] = {
+        (uint8_t)(d1 >> 8), (uint8_t)(d1 & 0xFF),
+        (uint8_t)(d2 >> 8), (uint8_t)(d2 & 0xFF)
+    };
+    sh8601_write_cmd_bytes(cmd, buf, 4);
 }
 
 static void s3_amoled_set_brightness(uint8_t level) {
-    sh8601_tx_param(0x51, &level, 1);
+    sh8601_write_cmd_data(0x51, level);
 }
 
 static bool s3_amoled_init() {
-    pinMode(PIN_LCD_RST, OUTPUT);
-    pinMode(PIN_LCD_TE, INPUT);
+    // Configure CS as manual GPIO output (matches baye-rust sh8601.rs)
+    gpio_set_direction((gpio_num_t)PIN_LCD_CS, GPIO_MODE_OUTPUT);
+    sh8601_cs_high();
 
-    // Hardware reset pulse
-    digitalWrite(PIN_LCD_RST, HIGH);
-    delay(10);
-    digitalWrite(PIN_LCD_RST, LOW);
-    delay(20);
-    digitalWrite(PIN_LCD_RST, HIGH);
-    delay(150);
+    if (!g_board_is_18) {
+        // 2.06" board has direct LCD_RST on GPIO 8
+        pinMode(PIN_LCD_RST_206, OUTPUT);
+        pinMode(PIN_LCD_TE, INPUT);
+        digitalWrite(PIN_LCD_RST_206, HIGH);
+        delay(10);
+        digitalWrite(PIN_LCD_RST_206, LOW);
+        delay(20);
+        digitalWrite(PIN_LCD_RST_206, HIGH);
+        delay(150);
+    }
 
-    // Initialize QSPI bus on SPI2_HOST
     spi_bus_config_t buscfg;
     memset(&buscfg, 0, sizeof(buscfg));
     buscfg.sclk_io_num     = PIN_LCD_PCLK;
@@ -384,8 +540,12 @@ static bool s3_amoled_init() {
     buscfg.data1_io_num    = PIN_LCD_D1;
     buscfg.data2_io_num    = PIN_LCD_D2;
     buscfg.data3_io_num    = PIN_LCD_D3;
-    buscfg.max_transfer_sz = AMOLED_W * AMOLED_BAND_H * 2 + 64;
-    buscfg.flags           = SPICOMMON_BUSFLAG_MASTER | SPICOMMON_BUSFLAG_QUAD;
+    buscfg.data4_io_num    = -1;
+    buscfg.data5_io_num    = -1;
+    buscfg.data6_io_num    = -1;
+    buscfg.data7_io_num    = -1;
+    buscfg.max_transfer_sz = (AMOLED_MAX_W * AMOLED_BAND_H * 2) + 64;
+    buscfg.flags           = SPICOMMON_BUSFLAG_MASTER | SPICOMMON_BUSFLAG_GPIO_PINS;
 
     if (spi_bus_initialize(SPI2_HOST, &buscfg, SPI_DMA_CH_AUTO) != ESP_OK) {
         return false;
@@ -395,76 +555,139 @@ static bool s3_amoled_init() {
     memset(&devcfg, 0, sizeof(devcfg));
     devcfg.command_bits   = 8;
     devcfg.address_bits   = 24;
+    devcfg.dummy_bits     = 0;
     devcfg.mode           = 0;
-    devcfg.clock_speed_hz = 40 * 1000 * 1000; // 40 MHz QSPI = 20 MB/s
-    devcfg.spics_io_num   = PIN_LCD_CS;
-    devcfg.queue_size     = 4;
+    devcfg.clock_speed_hz = 40 * 1000 * 1000;
+    devcfg.spics_io_num   = -1; // Manual CS control on GPIO 12
     devcfg.flags          = SPI_DEVICE_HALFDUPLEX;
+    devcfg.queue_size     = 1;
 
     if (spi_bus_add_device(SPI2_HOST, &devcfg, &s_amoled_spi) != ESP_OK) {
         return false;
     }
+    spi_device_acquire_bus(s_amoled_spi, portMAX_DELAY);
 
-    // Allocate DMA-capable band buffer in internal SRAM (21,320 bytes)
-    s_band_buf = (uint16_t*)heap_caps_malloc(AMOLED_W * AMOLED_BAND_H * sizeof(uint16_t),
-                                             MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    // Allocate DMA-capable band buffer in internal SRAM
+    size_t band_bytes = (size_t)AMOLED_MAX_W * (size_t)AMOLED_BAND_H * sizeof(uint16_t);
+    s_band_buf = (uint16_t*)heap_caps_aligned_alloc(16, band_bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     if (!s_band_buf) {
-        s_band_buf = (uint16_t*)malloc(AMOLED_W * AMOLED_BAND_H * sizeof(uint16_t));
+        s_band_buf = (uint16_t*)heap_caps_malloc(band_bytes, MALLOC_CAP_DMA);
     }
 
-    // Exact Waveshare ESP32-S3-Touch-AMOLED-2.06 SH8601/CO5300 init sequence
-    const uint8_t madctl = 0x00;
-    const uint8_t colmod = 0x55; // 16-bit RGB565
-    sh8601_tx_param(0x36, &madctl, 1);
-    sh8601_tx_param(0x3A, &colmod, 1);
-
-    sh8601_tx_param(0x11, NULL, 0); // Sleep Out
-    delay(120);
-
-    const uint8_t c4[] = {0x80};
-    sh8601_tx_param(0xC4, c4, 1);
-
-    const uint8_t te_line[] = {0x01, 0xD1};
-    sh8601_tx_param(0x44, te_line, 2);
-
-    const uint8_t te_on[] = {0x00};
-    sh8601_tx_param(0x35, te_on, 1);
-
-    const uint8_t ctrl_d[] = {0x20};
-    sh8601_tx_param(0x53, ctrl_d, 1);
-    delay(10);
-
-    const uint8_t hbm[] = {0xFF};
-    sh8601_tx_param(0x63, hbm, 1);
-    delay(10);
-
-    const uint8_t dim0[] = {0x00};
-    sh8601_tx_param(0x51, dim0, 1);
-    delay(10);
-
-    sh8601_tx_param(0x29, NULL, 0); // Display ON
-    delay(20);
-
-    const uint8_t full_bright[] = {0xFF};
-    sh8601_tx_param(0x51, full_bright, 1);
+    if (g_board_is_18) {
+        // Exact Waveshare ESP32-S3-Touch-AMOLED-1.8 SH8601 init sequence (from baye-rust)
+        sh8601_write_cmd(0x01); // SWRESET
+        delay(200);
+        sh8601_write_cmd(0x11); // SLPOUT
+        delay(120);
+        sh8601_write_cmd(0x13); // NORON
+        sh8601_write_cmd(0x20); // INVOFF
+        sh8601_write_cmd_data(0x3A, 0x05); // PIXFMT = RGB565
+        sh8601_write_cmd(0x29); // DISPON
+        sh8601_write_cmd_data(0x53, 0x28); // CTRL_DISPLAY
+        sh8601_write_cmd_data(0x51, 0xF0); // BRIGHTNESS (94%)
+        sh8601_write_cmd_data(0x58, 0x00); // CE off
+        delay(15);
+    } else {
+        // Exact Waveshare ESP32-S3-Touch-AMOLED-2.06 SH8601/CO5300 init sequence
+        sh8601_write_cmd_data(0x36, 0x00);
+        sh8601_write_cmd_data(0x3A, 0x55);
+        sh8601_write_cmd(0x11);
+        delay(120);
+        sh8601_write_cmd_data(0xC4, 0x80);
+        const uint8_t te_line[2] = {0x01, 0xD1};
+        sh8601_write_cmd_bytes(0x44, te_line, 2);
+        sh8601_write_cmd_data(0x35, 0x00);
+        sh8601_write_cmd_data(0x53, 0x20);
+        delay(10);
+        sh8601_write_cmd_data(0x63, 0xFF);
+        delay(10);
+        sh8601_write_cmd(0x29);
+        delay(20);
+        sh8601_write_cmd_data(0x51, 0xFF);
+    }
 
     return (s_band_buf != NULL);
 }
 
+static void s3_amoled_begin_frame() {
+    if (!s_amoled_spi || !s_band_buf) return;
+    if (g_board_is_18) {
+        uint16_t x0 = g_lcd_x_gap;
+        uint16_t x1 = g_lcd_x_gap + g_lcd_w - 1;
+        uint16_t y0 = 0;
+        uint16_t y1 = g_lcd_h - 1;
+        sh8601_write_cmd_data32(0x2A, x0, x1);
+        sh8601_write_cmd_data32(0x2B, y0, y1);
+        sh8601_write_cmd(0x2C); // RAMWR
+        s_first_chunk = true;
+    }
+}
+
 static void s3_amoled_push_band(int y0, int h) {
     if (!s_amoled_spi || !s_band_buf || h <= 0) return;
-    uint16_t xs = AMOLED_X_GAP;
-    uint16_t xe = AMOLED_X_GAP + AMOLED_W - 1;
-    uint16_t ys = (uint16_t)(AMOLED_Y_GAP + y0);
-    uint16_t ye = (uint16_t)(AMOLED_Y_GAP + y0 + h - 1);
 
-    uint8_t caset[4] = {(uint8_t)(xs >> 8), (uint8_t)(xs & 0xFF),
-                        (uint8_t)(xe >> 8), (uint8_t)(xe & 0xFF)};
-    uint8_t raset[4] = {(uint8_t)(ys >> 8), (uint8_t)(ys & 0xFF),
-                        (uint8_t)(ye >> 8), (uint8_t)(ye & 0xFF)};
-    sh8601_tx_param(0x2A, caset, 4);
-    sh8601_tx_param(0x2B, raset, 4);
-    sh8601_tx_color(s_band_buf, (size_t)AMOLED_W * (size_t)h * 2);
+    if (!g_board_is_18) {
+        // 2.06" CO5300 per-band window + 0x32 / 0x002C00 QIO write
+        uint16_t x0 = g_lcd_x_gap;
+        uint16_t x1 = g_lcd_x_gap + g_lcd_w - 1;
+        uint16_t y1 = (uint16_t)(y0 + h - 1);
+        sh8601_write_cmd_data32(0x2A, x0, x1);
+        sh8601_write_cmd_data32(0x2B, (uint16_t)y0, y1);
+
+        sh8601_cs_low();
+        spi_transaction_ext_t tran;
+        memset(&tran, 0, sizeof(tran));
+        tran.base.flags     = SPI_TRANS_MODE_QIO;
+        tran.base.cmd       = 0x32;
+        tran.base.addr      = 0x002C00;
+        tran.base.tx_buffer = s_band_buf;
+        tran.base.length    = (size_t)g_lcd_w * (size_t)h * 16;
+        spi_device_polling_transmit(s_amoled_spi, &tran.base);
+        sh8601_cs_high();
+        return;
+    }
+
+    // 1.8" SH8601 1024-pixel chunked QSPI DMA streaming (baye-rust sh8601.rs)
+    size_t total_pixels = (size_t)g_lcd_w * (size_t)h;
+    size_t offset = 0;
+
+    while (offset < total_pixels) {
+        size_t chunk = total_pixels - offset;
+        if (chunk > QSPI_CHUNK_PIXELS) chunk = QSPI_CHUNK_PIXELS;
+
+        if (s_first_chunk) {
+            sh8601_cs_low();
+        }
+
+        spi_transaction_ext_t tran;
+        memset(&tran, 0, sizeof(tran));
+        if (s_first_chunk) {
+            tran.base.flags = SPI_TRANS_MODE_QIO;
+            tran.base.cmd   = 0x32;
+            tran.base.addr  = 0x003C00; // RAMWRC (Memory Write Continue)
+            s_first_chunk   = false;
+        } else {
+            tran.base.flags   = SPI_TRANS_MODE_QIO |
+                                SPI_TRANS_VARIABLE_CMD |
+                                SPI_TRANS_VARIABLE_ADDR |
+                                SPI_TRANS_VARIABLE_DUMMY;
+            tran.command_bits = 0;
+            tran.address_bits = 0;
+            tran.dummy_bits   = 0;
+        }
+        tran.base.tx_buffer = &s_band_buf[offset];
+        tran.base.length    = chunk * 16; // bits
+        spi_device_polling_transmit(s_amoled_spi, &tran.base);
+
+        offset += chunk;
+    }
+}
+
+static void s3_amoled_end_frame() {
+    if (g_board_is_18) {
+        sh8601_cs_high();
+    }
 }
 
 // ============================================================
@@ -570,34 +793,34 @@ static const uint8_t FONT5X7[95][5] PROGMEM = {
 
 // ============================================================
 // Band-Clipped True-Color 2D Rasterizer (S3Canvas)
-// Renders full 410x502 scene in 26-row horizontal DMA bands
+// Responsive across 368x448 (1.8") and 410x502 (2.06")
 // ============================================================
 struct S3Canvas {
     int y0;
     int y1;
 
     inline void clear(uint16_t color) {
-        int count = AMOLED_W * (y1 - y0);
+        int count = (int)g_lcd_w * (y1 - y0);
         for (int i = 0; i < count; i++) {
             s_band_buf[i] = color;
         }
     }
 
     inline void put_px(int x, int y, uint16_t color) {
-        if ((unsigned)x >= AMOLED_W || y < y0 || y >= y1) return;
-        s_band_buf[(y - y0) * AMOLED_W + x] = color;
+        if ((unsigned)x >= g_lcd_w || y < y0 || y >= y1) return;
+        s_band_buf[(y - y0) * g_lcd_w + x] = color;
     }
 
     inline void fill_rect(int x, int y, int w, int h, uint16_t color) {
         if (w <= 0 || h <= 0) return;
         int x_start = (x < 0) ? 0 : x;
-        int x_end   = (x + w > AMOLED_W) ? AMOLED_W : (x + w);
+        int x_end   = (x + w > (int)g_lcd_w) ? (int)g_lcd_w : (x + w);
         int y_start = (y < y0) ? y0 : y;
         int y_end   = (y + h > y1) ? y1 : (y + h);
         if (x_start >= x_end || y_start >= y_end) return;
 
         for (int py = y_start; py < y_end; py++) {
-            uint16_t* row = &s_band_buf[(py - y0) * AMOLED_W + x_start];
+            uint16_t* row = &s_band_buf[(py - y0) * g_lcd_w + x_start];
             int span = x_end - x_start;
             for (int i = 0; i < span; i++) row[i] = color;
         }
@@ -606,18 +829,18 @@ struct S3Canvas {
     inline void draw_hline(int x, int y, int w, uint16_t color) {
         if (y < y0 || y >= y1 || w <= 0) return;
         int x_start = (x < 0) ? 0 : x;
-        int x_end   = (x + w > AMOLED_W) ? AMOLED_W : (x + w);
+        int x_end   = (x + w > (int)g_lcd_w) ? (int)g_lcd_w : (x + w);
         if (x_start >= x_end) return;
-        uint16_t* row = &s_band_buf[(y - y0) * AMOLED_W + x_start];
+        uint16_t* row = &s_band_buf[(y - y0) * g_lcd_w + x_start];
         for (int i = 0; i < x_end - x_start; i++) row[i] = color;
     }
 
     inline void draw_vline(int x, int y, int h, uint16_t color) {
-        if ((unsigned)x >= AMOLED_W || h <= 0) return;
+        if ((unsigned)x >= g_lcd_w || h <= 0) return;
         int y_start = (y < y0) ? y0 : y;
         int y_end   = (y + h > y1) ? y1 : (y + h);
         for (int py = y_start; py < y_end; py++) {
-            s_band_buf[(py - y0) * AMOLED_W + x] = color;
+            s_band_buf[(py - y0) * g_lcd_w + x] = color;
         }
     }
 
@@ -628,7 +851,6 @@ struct S3Canvas {
         draw_vline(x + w - 1, y, h, color);
     }
 
-    // Rounded card with 4px corner bevels
     inline void fill_card(int x, int y, int w, int h, uint16_t fill_col, uint16_t border_col) {
         if (y + h <= y0 || y >= y1) return;
         fill_rect(x + 2, y, w - 4, 1, border_col);

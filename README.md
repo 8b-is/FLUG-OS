@@ -20,16 +20,17 @@
 |  PACKET TYPES : [BEACON] [PROBE-REQ] [DATA-ACK] [EAPOL] [DEAUTH]     |
 |  SAMPLING     : Promiscuous IQ Waveform Captures @ 802.11b/g/n       |
 +----------------------------------------------------------------------+
-|  TARGET BOARDS: Waveshare ESP32-S3-Touch-AMOLED-2.06 (410x502 QSPI)  |
+|  TARGET BOARDS: Waveshare ESP32-S3-Touch-AMOLED-1.8  (368x448 QSPI)  |
+|                 Waveshare ESP32-S3-Touch-AMOLED-2.06 (410x502 QSPI)  |
 |                 Flipper Zero WiFi Devboard v1 (ESP8285)              |
-|  SYSTEM CORE  : FLUG-OS Real-Time Kernel + Wave Engine v0.4.0        |
+|  SYSTEM CORE  : FLUG-OS Real-Time Kernel + Wave Engine v0.5.0        |
 |  SIGNING      : ML-DSA-65 + SLH-DSA post-quantum (NIST FIPS 204/205) |
 +----------------------------------------------------------------------+
 
 
-**FLUG-OS{-1,0,+1}** — Fluid Operating System for the **Waveshare ESP32-S3-Touch-AMOLED-2.06** (`410 × 502` QSPI AMOLED, `FT3168` capacitive touch, `QMI8658` 6-axis IMU, `AXP2101` PMIC) and the **Flipper Zero WiFi Module v1** (`ESP8285`).
+**FLUG-OS{-1,0,+1} (`v0.5.0+ultra-omni-zen`)** — Fluid Operating System for the **Waveshare ESP32-S3-Touch-AMOLED-1.8** (`368 × 448` `SH8601` QSPI AMOLED, `TCA9554` I/O expander, `ES8311` audio codec, `FT3168` capacitive touch, `QMI8658` 6-axis IMU, `AXP2101` PMIC — persona **`adaye`**), the **Waveshare ESP32-S3-Touch-AMOLED-2.06** (`410 × 502` `SH8601/CO5300` QSPI AMOLED — persona **`vaked`**), and the **Flipper Zero WiFi Module v1** (`ESP8285`).
 Captures 802.11 frames in promiscuous mode, streams packet features as numerical wave data
-through the universal sine kernel K(u)=sin(πu)/(πu), and renders a live 4-tab Sovereign Constellation Cockpit (`RADIO`, `802.11`, `NAND`, `QWAVE`) on the 2.06" AMOLED display.
+through the universal sine kernel K(u)=sin(πu)/(πu), synchronizes wave splashes and track selection across sibling boards via **ESP-NOW** (`S3OmniPeerPacket`), and renders a live 5-tab Sovereign Constellation Cockpit (`ZEN`, `RADIO`, `802.11`, `NAND`, `QWAVE`) on both the 1.8" (`368×448`) and 2.06" (`410×502`) AMOLED displays.
 
 Aligned with **axiomquant.org** & **vaked.dev × 8b-is** — five threshold domains:
 Erdős β₁ · BitNet ternary γ · Markowitz λ · Black-Scholes σ · Rényi dyadic β.
@@ -38,39 +39,48 @@ Signed with **ML-DSA-65 + SLH-DSA** post-quantum signatures (NIST FIPS 203/204/2
 
 **Roadmap:** https://github.com/8b-is/FLUG-OS/blob/main/ROADMAP.md — target v1.4.2 parity with MLX-QUANT.
 
-## ESP32-S3-Touch-AMOLED-2.06 Constellation Cockpit (`v0.4.0`)
+## ESP32-S3-Touch-AMOLED-1.8 (`adaye`) & 2.06 (`vaked`) ULTRA-OMNI-ZEN Cockpit (`v0.5.0`)
 
-Evolving `vaked.dev` (`zoneInn` / `radio.vaked.dev`, `ultrawhale-oscillator`, `qwave` `sphered` / `quanttern`) directly onto the **Waveshare ESP32-S3-Touch-AMOLED-2.06**:
+Evolving `vaked.dev` & `8b-is` (`baye-rust` Jelly Sphere Mind-Wall + 2D Wave Pool, `zoneInn` / `radio.vaked.dev`, `ultrawhale-oscillator`, `qwave` `sphered` / `quanttern`) onto both attached Waveshare ESP32-S3 AMOLED boards with runtime auto-detection:
 
-| Subsystem | Hardware IC & Bus | GPIO / Address | Function in FLUG-OS v0.4.0 |
-|-----------|-------------------|----------------|----------------------------|
-| **AMOLED Display** | `SH8601 / CO5300` (`410×502` QSPI, `x_gap=0x16`) | `CS=12, PCLK=11, D0..D3=4..7, RST=8, TE=13` | 26-row DMA band rasterizer (`S3Canvas`) at 40 MHz QSPI in Constellation Ink |
-| **Power / PMIC** | `AXP2101` on `I2C_NUM_0` | `SDA=15, SCL=14` @ `0x34` | Enables `DCDC1` & `ALDO1..4` 3.3V display/sensor rails + battery mV/% telemetry |
-| **Capacitive Touch** | `FT3168` on `I2C_NUM_0` | `SDA=15, SCL=14` @ `0x38` (`RST=9, INT=38`) | Interactive 4-tab navigation, track crate selection, channel hop & dual-boot control |
-| **6-Axis IMU** | `QMI8658` on `I2C_NUM_0` | `SDA=15, SCL=14` @ `0x6B` | Real-time 3D Accel/Gyro → `qwave` `QuantTern` 6-bit VAD affect (`qt:xx`) & Lissajous tilt |
-| **RTC** | `PCF85063` on `I2C_NUM_0` | `SDA=15, SCL=14` @ `0x51` | Sovereign witness timestamping |
+| Subsystem | 1.8" (`adaye` · `/dev/cu.usbmodem1101`) | 2.06" (`vaked` · `/dev/cu.usbmodem2101`) | Function in FLUG-OS v0.5.0 |
+|-----------|------------------------------------------|-------------------------------------------|----------------------------|
+| **AMOLED Display** | `SH8601` (`368×448` QSPI, `x_gap=0`) | `SH8601 / CO5300` (`410×502` QSPI, `x_gap=0x16`) | 28-row DMA band rasterizer (`S3Canvas`) at 40 MHz QSPI in Constellation Ink |
+| **I/O Expander** | `TCA9554` @ `0x20` (`SDA=15, SCL=14`) | Direct GPIO reset (`LCD_RST=8, TP_RST=9`) | Runtime board auto-detection (`0x20` probe) + display/touch/audio rail reset |
+| **Audio Codec** | `ES8311` @ `0x18` + `PA_EN=GPIO46` | `ES8311` @ `0x18` + `PA_EN=GPIO46` | Full ADF codec register init + 85% DAC volume |
+| **Power / PMIC** | `AXP2101` @ `0x34` | `AXP2101` @ `0x34` | Enables `DCDC1` & `ALDO1..4` + `BLDO1..2` 3.3V rails + battery mV/% telemetry |
+| **Capacitive Touch** | `FT3168` @ `0x38` (`INT=21`) | `FT3168` @ `0x38` (`RST=9, INT=38`) | 5-tab navigation, live 2D Wave Pool ripple injection, crate & channel control |
+| **6-Axis IMU** | `QMI8658` @ `0x6B` | `QMI8658` @ `0x6B` | 3D Accel/Gyro → `qwave` `QuantTern` 6-bit VAD affect (`qt:xx`), sickness & Lissajous tilt |
+| **ESP-NOW Mesh** | MAC `80:B5:4E:DB:3B:C4` | MAC `80:B5:4E:F2:02:B0` | Over-the-air `S3OmniPeerPacket` wave splash & `zoneInn` track synchronization |
 
-### Four Interactive AMOLED Views
+### Five Interactive AMOLED Views
 
-1. **`[0] RADIO` (`ZONEINN · RADIO.VAKED.DEV`)**: Interactive **14 Favourite Musics Crate** (`Innerbloom`, `Mahakala`, `Take Five`, `So What`, `Time`, `Clair de Lune`, `Gymnopédie No. 1`, `Golden Ratio 432×φ`, `Beethoven 5th`, `Ode to Joy`, `Für Elise`, `Pachelbel's Canon`, `Midnight Sovereign`, `Ultrawhale NAND Groove`) + live 8-band Ternary Harmonic Equalizer (`{-1, 0, +1}`).
-2. **`[1] 802.11` (`FLUG-OS · PACKET-WAVE SAMPLER`)**: Live 13-channel promiscuous RSSI spectrum analyzer, AxiomQuant `K(u) = sin(πu)/(πu)` oscilloscope trace, and `64×3` `TernarySeam` radiation matrix.
-3. **`[2] NAND` (`ULTRAWHALE · NAND × IMU`)**: Live 7-stage cross-coupled ternary NAND ring oscillator (`peetpedro/ultrawhale-oscillator`) + QMI8658 IMU-tilted 2D Lissajous harmonic phase portrait.
-4. **`[3] QWAVE` (`SPHERED · SOVEREIGN CORE`)**: `<(? admit ~ transform ! verify @ attribute > commit)>` `#Commit = #ValidWitness` 5-stage witness badge + Dual-Boot Partition Switcher (`OTA_0: FLUG-OS v0.4.0` ↔ `FACTORY: ESP-Brookesia` preserved at `0x100000`).
+1. **`[0] ZEN` (`ULTRA-OMNI-ZEN · JELLY SPHERE MIND-WALL`)**: Circular **Jelly Sphere Mind-Wall** (`baye-rust` / `8b-is/oxi-phoenix`) backed by a `64×64` integer Laplacian **2D Wave Pool** (`u_next = 2u - u_prev + c²∇²u`, damping `251/256`), orbiting 7-stage ternary NAND nodes on the amber info ring, **Eye of Aye** IMU-tilted reticle, touch-to-splash ripple injection, and live `adaye ↔ vaked` ESP-NOW peer capsule sync.
+2. **`[1] RADIO` (`ZONEINN · RADIO.VAKED.DEV`)**: Interactive **14 Favourite Musics Crate** (`Innerbloom`, `Mahakala`, `Take Five`, `So What`, `Time`, `Clair de Lune`, `Gymnopédie No. 1`, `Golden Ratio 432×φ`, `Beethoven 5th`, `Ode to Joy`, `Für Elise`, `Pachelbel's Canon`, `Midnight Sovereign`, `Ultrawhale NAND Groove`) + live 8-band Ternary Harmonic Equalizer (`{-1, 0, +1}`).
+3. **`[2] 802.11` (`FLUG-OS · PACKET-WAVE SAMPLER`)**: Live 13-channel promiscuous RSSI spectrum analyzer, AxiomQuant `K(u) = sin(πu)/(πu)` oscilloscope trace, and `64×3` `TernarySeam` radiation matrix.
+4. **`[3] NAND` (`ULTRAWHALE · NAND × IMU`)**: Live 7-stage cross-coupled ternary NAND ring oscillator (`peetpedro/ultrawhale-oscillator`) + QMI8658 IMU-tilted 2D Lissajous harmonic phase portrait.
+5. **`[4] QWAVE` (`SPHERED · SOVEREIGN CORE`)**: `<(? admit ~ transform ! verify @ attribute > commit)>` `#Commit = #ValidWitness` 5-stage witness badge + Hardware Identity (`1.8" adaye` / `2.06" vaked`) + Flash & Backup Switcher.
 
-### Build, Flash & Bridge (ESP32-S3 AMOLED)
+### Build, Flash & Multi-Board Bridge (ESP32-S3 AMOLED 1.8" & 2.06")
 
 ```bash
-# Build ESP32-S3 AMOLED firmware (.pio/build/esp32s3_amoled/firmware.bin)
-pio run -e esp32s3_amoled
+# Build unified ESP32-S3 AMOLED firmware (.pio/build/esp32s3_amoled_18/firmware.bin)
+pio run -e esp32s3_amoled -e esp32s3_amoled_18
 
-# Dual-boot flash to ota_0 (0x00a00000), keeping factory (0x00100000) intact
-esptool --chip esp32s3 --port /dev/cu.usbmodem2101 --baud 921600 \
-  write-flash --flash-mode qio --flash-freq 80m --flash-size 32MB \
+# Flash Waveshare ESP32-S3-Touch-AMOLED-1.8 (/dev/cu.usbmodem1101, 16MB flash)
+esptool.py --chip esp32s3 --port /dev/cu.usbmodem1101 --baud 921600 \
+  write_flash -z --flash_mode dio --flash_freq 80m --flash_size 16MB \
+  0x00010000 .pio/build/esp32s3_amoled_18/firmware.bin
+
+# Flash Waveshare ESP32-S3-Touch-AMOLED-2.06 (/dev/cu.usbmodem2101, ota_0 @ 0x00a00000)
+esptool.py --chip esp32s3 --port /dev/cu.usbmodem2101 --baud 921600 \
+  write_flash -z --flash_mode dio --flash_freq 80m --flash_size 32MB \
   0x00a00000 .pio/build/esp32s3_amoled/firmware.bin
 
-# Query live telemetry / switch tabs / sync with zoneInn Bluetooth playback
-uv run --with pyserial python bridge/s3_amoled_bridge.py --status
-uv run --with pyserial python bridge/s3_amoled_bridge.py --track 8
+# Query live telemetry / inject 2D wave splashes / sync tracks across BOTH boards simultaneously
+uv run --with pyserial python bridge/s3_amoled_bridge.py --all --status
+uv run --with pyserial python bridge/s3_amoled_bridge.py --all --splash
+uv run --with pyserial python bridge/s3_amoled_bridge.py --all --track 8
 uv run --with pyserial python bridge/s3_amoled_bridge.py --listen --bt "Soundcore Select 4"
 ```
 

@@ -34,7 +34,7 @@ ternary matrix → ayeOS inference → HF-MAC visualization.
 ✅ CI with Blacksmith runner (build + test)
 ```
 
-## v0.4.0 — ESP32-S3 AMOLED Constellation Evolution & Hardware Validation (current)
+## v0.4.0 — ESP32-S3 AMOLED Constellation Evolution & Hardware Validation (shipped)
 
 ```
 ✅ Flash & boot on physical Waveshare ESP32-S3-Touch-AMOLED-2.06 (/dev/cu.usbmodem2101)
@@ -47,6 +47,17 @@ ternary matrix → ayeOS inference → HF-MAC visualization.
 ✅ Validate live 802.11 promiscuous RSSI & SSID extraction across channels 1-13
 ✅ Complete sine-kernel K(u)=sin(pi*u)/(pi*u) radiation-delta weighting in ternary_seam.h
 ✅ Host bridge (bridge/s3_amoled_bridge.py) syncing touchscreen track selection to zoneInn
+```
+
+## v0.5.0 — ULTRA-OMNI-ZEN Dual-Board Evolution (1.8" `adaye` × 2.06" `vaked`) (current)
+
+```
+✅ Unified runtime auto-detection for Waveshare ESP32-S3-Touch-AMOLED-1.8 (368x448, TCA9554 @ 0x20) & 2.06 (410x502)
+✅ Full ES8311 (0x18) audio codec ADF initialization + speaker amplifier enable (GPIO 46)
+✅ Tab 0 [ZEN]: baye-rust Jelly Sphere Mind-Wall + 64x64 integer Laplacian 2D Wave Pool + Eye of Aye reticle
+✅ Orbiting 7-stage Ternary NAND nodes + QMI8658 gyro sickness reactivity + touch-to-splash wave excitation
+✅ Live ESP-NOW peer capsule sync (S3OmniPeerPacket) between 1.8" adaye (1101) and 2.06" vaked (2101)
+✅ Multi-board host bridge (bridge/s3_amoled_bridge.py --all --status / --splash / --track)
 ```
 
 ## v1.0.0 — Stable Release
