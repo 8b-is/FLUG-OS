@@ -39,9 +39,6 @@ DEFAULT_BAUD = 115200
 
 
 def discover_ports() -> list[str]:
-    found = [p for p in KNOWN_PORTS if Path(p).exists()]
-    if found:
-        return found
     return sorted(glob.glob("/dev/cu.usbmodem*"))
 
 

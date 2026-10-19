@@ -60,7 +60,7 @@ ternary matrix → ayeOS inference → HF-MAC visualization.
 ✅ Multi-board host bridge (bridge/s3_amoled_bridge.py --all --status / --splash / --track)
 ```
 
-## v0.6.0 — TRIAD INFINITY `{<3, <3, <3}+1 ~---> ∞` 3-Node Mesh (current)
+## v0.6.0 — TRIAD INFINITY `{<3, <3, <3}+1 ~---> ∞` 3-Node Mesh (shipped)
 
 ```
 ✅ Physical 3-Node Balanced-Ternary Triad {-1, 0, +1}:
@@ -70,6 +70,17 @@ ternary matrix → ayeOS inference → HF-MAC visualization.
 ✅ Interleaved Channel 6 Triad Rendezvous hopping (triad_online=3 across all 3 boards while scanning Ch 1..13)
 ✅ 3-Body Entanglement Triangle + Central Infinity Lemniscate inside the 64x64 2D Wave Pool
 ✅ Coupled 3-node Ultrawhale Ternary NAND Ring + synchronized zoneInn 14 Favourite Musics Crate
+```
+
+## v0.7.0 — IMPERMANENCE (`ms.8b.is` MarineSense × `Anicca` / `Turritopsis` Polyp Transdifferentiation) (current)
+
+```
+✅ MarineSense (https://ms.8b.is/ · 8b-is/marine-sense) O(1) Acoustic Salience Algorithm:
+   S = w_e * E + w_j * (1 / (1 + J)) + w_h * H (zero-crossing period jitter J, energy E, harmonic recurrence H)
+✅ 7 Bioluminescent Jellyfish Detector Nodes (Alpha, Beta, Gamma, Delta, Epsilon, Zeta, Eta) in 64x64 2D Wave Pool
+✅ MEM-8 Wave Resonance & Cognitive Ecphory: tidal damping modulation, Cognitive Viscosity (eta), Memory Reynolds (Re_M), expanding Ecphoric Recall Rings
+✅ Impermanence (Anicca) TTL (ttl_q8: 255 -> 0) & Turritopsis dohrnii MEDUSA <-> POLYP transdifferentiation across the 3-node Triad
+✅ Dynamic USB serial discovery (glob /dev/cu.usbmodem*) in bridge/s3_amoled_bridge.py across USB hub re-enumerations
 ```
 
 ## v1.0.0 — Stable Release

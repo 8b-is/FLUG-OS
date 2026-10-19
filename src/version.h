@@ -10,13 +10,13 @@
 #define FLUGOS_VERSION_H
 
 #define FLUGOS_VERSION_MAJOR  0
-#define FLUGOS_VERSION_MINOR  6
+#define FLUGOS_VERSION_MINOR  7
 #define FLUGOS_VERSION_PATCH  0
-#define FLUGOS_VERSION_STR    "0.6.0"
+#define FLUGOS_VERSION_STR    "0.7.0"
 
 /* Build metadata — populated by PlatformIO build_flags if set */
 #ifndef FLUGOS_COMMIT
-#define FLUGOS_COMMIT         "triad-infinity"
+#define FLUGOS_COMMIT         "impermanence"
 #endif
 
 #define FLUGOS_FULL_VERSION   "v" FLUGOS_VERSION_STR "+" FLUGOS_COMMIT
@@ -32,6 +32,7 @@
 #define FLUGOS_HAS_S3_AMOLED      1   /* v0.4.0: ESP32-S3 AMOLED 410x502*/
 #define FLUGOS_HAS_ULTRA_OMNI_ZEN 1   /* v0.5.0: 1.8" 368x448 + 2D Wave */
 #define FLUGOS_HAS_TRIAD_INFINITY 1   /* v0.6.0: {<3,<3,<3}+1 3-Node Mesh*/
+#define FLUGOS_HAS_IMPERMANENCE   1   /* v0.7.0: MarineSense O(1) + Anicca*/
 #define FLUGOS_HAS_MEMNET_EXPORT  0   /* v1.1.0: ayeOS capsule over UART*/
 #define FLUGOS_HAS_PWM_AUDIO      0   /* v1.2.0: GPIO headphone synth   */
 #define FLUGOS_HAS_PCAP_EXPORT    0   /* v1.3.0: Wireshark over UART    */
