@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-FLUG-OS × vaked.dev × 8b-is — ESP32-S3 AMOLED ULTRA-OMNI-ZEN Bridge (v0.5.0)
+FLUG-OS × vaked.dev × 8b-is — ESP32-S3 AMOLED MEDUSA-OMNI Bridge (v0.8.0+medusa-omni)
 
-Connects the Waveshare ESP32-S3-Touch-AMOLED-1.8 (/dev/cu.usbmodem1101, "adaye", 368x448)
-and Waveshare ESP32-S3-Touch-AMOLED-2.06 (/dev/cu.usbmodem2101, "vaked", 410x502)
-to the Mac host stack:
-  - Queries live hardware status (board auto-detection, persona, 802.11 promiscuous
-    packet count, RSSI, SSID, QMI8658 IMU QuantTern affect byte `qt:xx` + sickness,
-    64x64 2D Wave Pool splashes, ESP-NOW peer rx count, ES8311 audio status, AXP2101 battery)
-  - Syncs touchscreen track selections from the 14 Favourite Musics Crate
+Connects the Waveshare ESP32-S3-Touch-AMOLED-1.8 ("adaye" / ADA:MEDUSA, 368x448)
+and Waveshare ESP32-S3-Touch-AMOLED-2.06 ("vaked" / VAK:MEDUSA & "omni" / OMN:MEDUSA, 410x502)
+to the Mac host stack & https://esp32.vaked.dev/ WebSerial protocol:
+  - Queries live hardware status (board auto-detection, persona, medusa_node, vertex,
+    archetype, freq_hz, 802.11 promiscuous packet count, RSSI, SSID, QMI8658 IMU
+    QuantTern affect byte `qt:xx` + sickness, 64x64 2D Wave Pool splashes,
+    ESP-NOW peer rx count, ES8311 audio status, AXP2101 battery)
+  - Syncs touchscreen track selections from the 20 Favourite Musics Crate (family+1)
     directly to `zoneInn` (`cargo run -- play <slug>` or Bluetooth A2DP sink)
   - Switches AMOLED UI tabs (`0=ZEN`, `1=RADIO`, `2=802.11`, `3=NAND`, `4=QWAVE`),
     injects 2D Wave Pool splashes (`--splash`), locks channels (`--ch 1..13`),
@@ -19,7 +20,7 @@ Usage:
   uv run --with pyserial python bridge/s3_amoled_bridge.py --port /dev/cu.usbmodem1101 --status
   uv run --with pyserial python bridge/s3_amoled_bridge.py --all --splash
   uv run --with pyserial python bridge/s3_amoled_bridge.py --all --tab 0
-  uv run --with pyserial python bridge/s3_amoled_bridge.py --all --track 8
+  uv run --with pyserial python bridge/s3_amoled_bridge.py --all --track 15
   uv run --with pyserial python bridge/s3_amoled_bridge.py --listen --bt "Soundcore Select 4"
 """
 
@@ -149,7 +150,7 @@ def main():
     parser.add_argument("--status", action="store_true", help="Query live JSON status from ESP32-S3 AMOLED")
     parser.add_argument("--tab", type=int, choices=[0, 1, 2, 3, 4], help="Switch active AMOLED tab (0=ZEN, 1=RADIO, 2=802.11, 3=NAND, 4=QWAVE)")
     parser.add_argument("--splash", action="store_true", help="Inject central 2D Wave Pool splash + ESP-NOW peer broadcast")
-    parser.add_argument("--track", type=int, help="Select Favourite Music track (1..14)")
+    parser.add_argument("--track", type=int, help="Select Favourite Music track (1..20)")
     parser.add_argument("--ch", type=int, help="Lock 802.11 channel (1..13)")
     parser.add_argument("--hop", action="store_true", help="Toggle 802.11 channel hopping")
     parser.add_argument("--listen", action="store_true", help="Listen for touchscreen events & wave telemetry")

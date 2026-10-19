@@ -72,7 +72,7 @@ ternary matrix → ayeOS inference → HF-MAC visualization.
 ✅ Coupled 3-node Ultrawhale Ternary NAND Ring + synchronized zoneInn 14 Favourite Musics Crate
 ```
 
-## v0.7.0 — IMPERMANENCE (`ms.8b.is` MarineSense × `Anicca` / `Turritopsis` Polyp Transdifferentiation) (current)
+## v0.7.0 — IMPERMANENCE (`ms.8b.is` MarineSense × `Anicca` / `Turritopsis` Polyp Transdifferentiation) (shipped)
 
 ```
 ✅ MarineSense (https://ms.8b.is/ · 8b-is/marine-sense) O(1) Acoustic Salience Algorithm:
@@ -81,6 +81,27 @@ ternary matrix → ayeOS inference → HF-MAC visualization.
 ✅ MEM-8 Wave Resonance & Cognitive Ecphory: tidal damping modulation, Cognitive Viscosity (eta), Memory Reynolds (Re_M), expanding Ecphoric Recall Rings
 ✅ Impermanence (Anicca) TTL (ttl_q8: 255 -> 0) & Turritopsis dohrnii MEDUSA <-> POLYP transdifferentiation across the 3-node Triad
 ✅ Dynamic USB serial discovery (glob /dev/cu.usbmodem*) in bridge/s3_amoled_bridge.py across USB hub re-enumerations
+```
+
+## v0.8.0 — MEDUSA-OMNI (`wigle-triad` v0.42.1 WebSerial Fusion × 20-Track `family+1` Crate) (current)
+
+```
+✅ Fused wigle-triad (v0.42.1) WebSerial protocol for https://esp32.vaked.dev/:
+   PING -> # PONG|<medusa_node>|<mac>|<millis>
+   JSON / STATUS -> # JSON|{...} + standard FLUG-OS status JSON
+   SCAN -> W|<bssid>|<ssid>|WPA2-PSK|<ch>|<rssi> + Q|<medusa_node>|<vertex>|<mac>|<seq>|... + # JSON|{...}
+   TRIAD -> # TRIAD|... + # ANICCA|...
+✅ MEDUSA Triad Archetype mapping:
+   [-1] adaye (80:B5:4E:DB:3B:C4) -> ADA:MEDUSA (* · ROOT-ALEXANDRA · 432 Hz)
+   [ 0] vaked (80:B5:4E:F2:02:B0) -> VAK:MEDUSA (/\ · PILLAR-CHRIS · 528 Hz)
+   [+1] omni  (80:B5:4E:F2:02:B4) -> OMN:MEDUSA (oo · INFINITY-PETER-NATE · 852 Hz)
+✅ Expanded 20-Track Favourite Musics Crate (kCrateCount = 20) with 6 new family+1 & #1 Muse tracks:
+   15. Teardrop (Family+1) — Massive Attack (77 BPM, +1)
+   16. Hunger of the Pine — alt-J (85 BPM, -1)
+   17. Left Hand Free (#1 Muse) — alt-J (106 BPM, +1)
+   18. GLUE — BICEP (130 BPM, 0)
+   19. Oblivion — Grimes (156 BPM, +1)
+   20. Not Like Before — The Four Owls (90 BPM, -1)
 ```
 
 ## v1.0.0 — Stable Release

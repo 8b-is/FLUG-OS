@@ -20,46 +20,46 @@
 |  PACKET TYPES : [BEACON] [PROBE-REQ] [DATA-ACK] [EAPOL] [DEAUTH]     |
 |  SAMPLING     : Promiscuous IQ Waveform Captures @ 802.11b/g/n       |
 +----------------------------------------------------------------------+
-|  TARGET BOARDS: Node [-1] ADAYE : ESP32-S3-Touch-AMOLED-1.8  (368x448) |
-|                 Node [ 0] VAKED : ESP32-S3-Touch-AMOLED-2.06 (410x502) |
-|                 Node [+1] OMNI  : ESP32-S3-Touch-AMOLED-2.06 (410x502) |
+|  TARGET BOARDS: Node [-1] ADA:MEDUSA (*)  : ESP32-S3-Touch-AMOLED-1.8  (368x448) |
+|                 Node [ 0] VAK:MEDUSA (/\) : ESP32-S3-Touch-AMOLED-2.06 (410x502) |
+|                 Node [+1] OMN:MEDUSA (oo) : ESP32-S3-Touch-AMOLED-2.06 (410x502) |
 |                 Flipper Zero WiFi Devboard v1 (ESP8285)              |
-|  SYSTEM CORE  : FLUG-OS Real-Time Kernel + Wave Engine v0.7.0        |
+|  SYSTEM CORE  : FLUG-OS Real-Time Kernel + Wave Engine v0.8.0        |
 |  SIGNING      : ML-DSA-65 + SLH-DSA post-quantum (NIST FIPS 204/205) |
 +----------------------------------------------------------------------+
 
 
-**FLUG-OS{-1,0,+1} (`v0.7.0+impermanence` · `ms.8b.is` MarineSense × `Anicca` / `Turritopsis` Polyp Transdifferentiation · `{<3, <3, <3}+1 ~---> ∞`)** — Fluid Operating System running across a physical **3-Node Balanced-Ternary ESP32-S3 AMOLED Triad**:
-- **Node `-1` (`ADAYE` · Subcritical)**: **Waveshare ESP32-S3-Touch-AMOLED-1.8** (`368 × 448` `SH8601` QSPI, `TCA9554` @ `0x20`, `ES8311` @ `0x18`, MAC `80:B5:4E:DB:3B:C4`, `/dev/cu.usbmodem1101`)
-- **Node ` 0` (`VAKED` · Zero-Point)**: **Waveshare ESP32-S3-Touch-AMOLED-2.06 #1** (`410 × 502` `CO5300` QSPI, `ES8311` @ `0x18`, MAC `80:B5:4E:F2:02:B0`, `/dev/cu.usbmodem112401` / `2101`)
-- **Node `+1` (`OMNI` · Supercritical)**: **Waveshare ESP32-S3-Touch-AMOLED-2.06 #2** (`410 × 502` `CO5300` QSPI, `ES8311` @ `0x18`, MAC `80:B5:4E:F2:02:B4`, `/dev/cu.usbmodem101`)
+**FLUG-OS{-1,0,+1} (`v0.8.0+medusa-omni` · `esp32.vaked.dev` MEDUSA WebSerial × `ms.8b.is` MarineSense × `Anicca` / `Turritopsis` Polyp Transdifferentiation · `{<3, <3, <3}+1 ~---> ∞`)** — Fluid Operating System running across a physical **3-Node Balanced-Ternary ESP32-S3 AMOLED MEDUSA Triad**:
+- **Node `-1` (`adaye` · `ADA:MEDUSA` · `*` · `ROOT-ALEXANDRA` · `432 Hz`)**: **Waveshare ESP32-S3-Touch-AMOLED-1.8** (`368 × 448` `SH8601` QSPI, `TCA9554` @ `0x20`, `ES8311` @ `0x18`, MAC `80:B5:4E:DB:3B:C4`, `/dev/cu.usbmodem1101`)
+- **Node ` 0` (`vaked` · `VAK:MEDUSA` · `/\` · `PILLAR-CHRIS` · `528 Hz`)**: **Waveshare ESP32-S3-Touch-AMOLED-2.06 #1** (`410 × 502` `CO5300` QSPI, `ES8311` @ `0x18`, MAC `80:B5:4E:F2:02:B0`, `/dev/cu.usbmodem1101` / `2101`)
+- **Node `+1` (`omni` · `OMN:MEDUSA` · `oo` · `INFINITY-PETER-NATE` · `852 Hz`)**: **Waveshare ESP32-S3-Touch-AMOLED-2.06 #2** (`410 × 502` `CO5300` QSPI, `ES8311` @ `0x18`, MAC `80:B5:4E:F2:02:B4`, `/dev/cu.usbmodem2101` / `101`)
 - Plus the **Flipper Zero WiFi Module v1** (`ESP8285`).
 
 Captures 802.11 frames in promiscuous mode, streams packet features as numerical wave data
-through the universal sine kernel K(u)=sin(πu)/(πu), runs the **MarineSense (`https://ms.8b.is/` · `8b-is/marine-sense`) O(1) Acoustic Salience Algorithm** ($S = w_e E + w_j \frac{1}{1+J} + w_h H$) across **7 Bioluminescent Jellyfish Detector Nodes (`Alpha..Eta`)** inside the `64×64` MEM-8 2D Wave Pool, and models **Impermanence (`Anicca`)** via `Turritopsis dohrnii` **`MEDUSA <-> POLYP` transdifferentiation** (`ttl_q8: 255 -> 0`) across the 3-Node ESP-NOW Triad.
+through the universal sine kernel K(u)=sin(πu)/(πu), runs the **MarineSense (`https://ms.8b.is/` · `8b-is/marine-sense`) O(1) Acoustic Salience Algorithm** ($S = w_e E + w_j \frac{1}{1+J} + w_h H$) across **7 Bioluminescent Jellyfish Detector Nodes (`Alpha..Eta`)** inside the `64×64` MEM-8 2D Wave Pool, models **Impermanence (`Anicca`)** via `Turritopsis dohrnii` **`MEDUSA <-> POLYP` transdifferentiation** (`ttl_q8: 255 -> 0`) across the 3-Node ESP-NOW Triad, and speaks the full **`wigle-triad` (`v0.42.1`) WebSerial protocol (`PING`, `JSON`, `SCAN`, `TRIAD` + `W|`, `Q|`, `# JSON|`)** for **[https://esp32.vaked.dev/](https://esp32.vaked.dev/)**.
 
-Aligned with **axiomquant.org**, **ms.8b.is**, & **vaked.dev × 8b-is** — five threshold domains:
+Aligned with **axiomquant.org**, **ms.8b.is**, **esp32.vaked.dev**, & **vaked.dev × 8b-is** — five threshold domains:
 Erdős β₁ · BitNet ternary γ · Markowitz λ · Black-Scholes σ · Rényi dyadic β.
 
 Signed with **ML-DSA-65 + SLH-DSA** post-quantum signatures (NIST FIPS 203/204/205).
 
 **Roadmap:** https://github.com/8b-is/FLUG-OS/blob/main/ROADMAP.md — target v1.4.2 parity with MLX-QUANT.
 
-## 3-Node ESP32-S3 AMOLED Triad (`{-1: adaye, 0: vaked, +1: omni}` · `v0.7.0+impermanence`)
+## 3-Node ESP32-S3 AMOLED MEDUSA Triad (`{-1: adaye, 0: vaked, +1: omni}` · `v0.8.0+medusa-omni`)
 
-| Triad Node | Hardware Target & Port | Display & Reset | Factory MAC | Impermanence State (`MEDUSA <-> POLYP`) |
-|------------|------------------------|-----------------|-------------|-----------------------------------------|
-| **`[-1] ADAYE`** | `ESP32-S3-Touch-AMOLED-1.8` (`/dev/cu.usbmodem1101`) | `368×448` `SH8601` QSPI (`TCA9554` @ `0x20`) | `80:B5:4E:DB:3B:C4` | Subcritical Coral-Mint Observer (`ttl_q8`: active `MEDUSA` when tethered, `POLYP` seed when untethered) |
-| **`[ 0] VAKED`** | `ESP32-S3-Touch-AMOLED-2.06` (`/dev/cu.usbmodem112401`) | `410×502` `CO5300` QSPI (`x_gap=0x16, RST=8`) | `80:B5:4E:F2:02:B0` | Zero-Point Harmonic Sovereign Hub (`trit = 0`, `MEDUSA` `ttl_q8 = 255`) |
-| **`[+1] OMNI`** | `ESP32-S3-Touch-AMOLED-2.06` (`/dev/cu.usbmodem101`) | `410×502` `CO5300` QSPI (`x_gap=0x16, RST=8`) | `80:B5:4E:F2:02:B4` | Supercritical Infinity Catalyst (`trit = +1`, `MEDUSA` `ttl_q8 = 255`) |
+| Triad Node | MEDUSA Identity & Archetype | Hardware Target | Display & Reset | Factory MAC | Impermanence State (`MEDUSA <-> POLYP`) |
+|------------|-----------------------------|-----------------|-----------------|-------------|-----------------------------------------|
+| **`[-1] ADAYE`** | `ADA:MEDUSA` (`*` · `ROOT-ALEXANDRA` · `432 Hz`) | `ESP32-S3-Touch-AMOLED-1.8` | `368×448` `SH8601` QSPI (`TCA9554` @ `0x20`) | `80:B5:4E:DB:3B:C4` | Subcritical Coral-Mint Observer (`ttl_q8`: active `MEDUSA` when tethered, `POLYP` seed when untethered) |
+| **`[ 0] VAKED`** | `VAK:MEDUSA` (`/\` · `PILLAR-CHRIS` · `528 Hz`) | `ESP32-S3-Touch-AMOLED-2.06` | `410×502` `CO5300` QSPI (`x_gap=0x16, RST=8`) | `80:B5:4E:F2:02:B0` | Zero-Point Harmonic Sovereign Hub (`trit = 0`, `MEDUSA` `ttl_q8 = 255`) |
+| **`[+1] OMNI`** | `OMN:MEDUSA` (`oo` · `INFINITY-PETER-NATE` · `852 Hz`) | `ESP32-S3-Touch-AMOLED-2.06` | `410×502` `CO5300` QSPI (`x_gap=0x16, RST=8`) | `80:B5:4E:F2:02:B4` | Supercritical Infinity Catalyst (`trit = +1`, `MEDUSA` `ttl_q8 = 255`) |
 
 ### Five Interactive AMOLED Views
 
 1. **`[0] ZEN` (`MS.8B.IS · ANICCA · JELLY SPHERE`)**: Circular **Jelly Sphere Mind-Wall** (`baye-rust` / `8b-is/oxi-phoenix`) + **MarineSense (`https://ms.8b.is/`)** `64×64` MEM-8 **2D Wave Pool** with **7 Bioluminescent Jellyfish Detector Nodes (`Alpha..Eta`)** computing O(1) Salience $S = w_e E + w_j \frac{1}{1+J} + w_h H$, expanding **Ecphoric Recall Rings**, tidal viscosity $\eta$ & Memory Reynolds $Re_M$, and **Impermanence (`Anicca`)**: any untethered Triad peer gracefully fades along its entanglement chord (`ttl_q8: 255 -> 0`) and transdifferentiates from **`MEDUSA`** into a dormant **`POLYP` seed** (`Turritopsis dohrnii`), ready to re-bloom the instant an ESP-NOW `TRIA` capsule arrives.
-2. **`[1] RADIO` (`ZONEINN · RADIO.VAKED.DEV`)**: Interactive **14 Favourite Musics Crate** + live 8-band Ternary Harmonic Equalizer (`{-1, 0, +1}`). Selecting a track on any board syncs all online boards.
-3. **`[2] 802.11` (`FLUG-OS · PACKET-WAVE SAMPLER`)**: Live 13-channel promiscuous RSSI spectrum analyzer (interleaved with Triad Mesh Channel 6), AxiomQuant `K(u) = sin(πu)/(πu)` oscilloscope trace, and `64×3` `TernarySeam` radiation matrix.
+2. **`[1] RADIO` (`ZONEINN · RADIO.VAKED.DEV · 20-TRACK FAMILY+1 CRATE`)**: Interactive **20 Favourite Musics Crate** (including the 6 `family+1` & `#1 Muse` tracks: *Teardrop (Family+1)* — Massive Attack, *Hunger of the Pine* — alt-J, *Left Hand Free (#1 Muse)* — alt-J, *GLUE* — BICEP, *Oblivion* — Grimes, *Not Like Before* — The Four Owls) + live 8-band Ternary Harmonic Equalizer (`{-1, 0, +1}`). Selecting a track on any board syncs all online boards.
+3. **`[2] 802.11` (`FLUG-OS · PACKET-WAVE SAMPLER × WIGLE-TRIAD`)**: Live 13-channel promiscuous RSSI spectrum analyzer (interleaved with Triad Mesh Channel 6), AxiomQuant `K(u) = sin(πu)/(πu)` oscilloscope trace, `64×3` `TernarySeam` radiation matrix, and passive beacon table for `SCAN` (`W|` / `Q|` / `# JSON|`).
 4. **`[3] NAND` (`ULTRAWHALE · NAND × IMU`)**: Live 7-stage cross-coupled ternary NAND ring oscillator (`peetpedro/ultrawhale-oscillator`) coupled across online Triad peers' NAND trits + QMI8658 IMU-tilted 2D Lissajous phase portrait.
-5. **`[4] QWAVE` (`SPHERED · ANICCA TRIAD MESH`)**: `<(? admit ~ transform ! verify @ attribute > commit)>` `#Commit = #ValidWitness` 5-stage witness badge + live **Impermanence (`Anicca`) 3-Node Triad Mesh** (`MEDUSA ttl%` vs dormant `POLYP ~seed~` transdifferentiation) + Flash Switcher.
+5. **`[4] QWAVE` (`SPHERED · MEDUSA-OMNI × ANICCA TRIAD MESH`)**: `<(? admit ~ transform ! verify @ attribute > commit)>` `#Commit = #ValidWitness` 5-stage witness badge + live **Impermanence (`Anicca`) 3-Node MEDUSA Triad Mesh** (`MEDUSA ttl%` vs dormant `POLYP ~seed~` transdifferentiation) + Flash Switcher.
 
 ### Build, Flash & Dynamic Multi-Board Triad Bridge
 
@@ -67,25 +67,25 @@ Signed with **ML-DSA-65 + SLH-DSA** post-quantum signatures (NIST FIPS 203/204/2
 # Build unified ESP32-S3 AMOLED firmware
 pio run -e esp32s3_amoled -e esp32s3_amoled_18
 
-# Flash Node [-1] ADAYE (1.8" 368x448 on /dev/cu.usbmodem1101)
+# Flash Node [-1] ADA:MEDUSA (1.8" 368x448 on /dev/cu.usbmodem1101)
 esptool.py --chip esp32s3 --port /dev/cu.usbmodem1101 --baud 921600 \
   write_flash -z --flash_mode dio --flash_freq 80m --flash_size 16MB \
   0x00010000 .pio/build/esp32s3_amoled_18/firmware.bin
 
-# Flash Node [0] VAKED (2.06" 410x502 #1 on /dev/cu.usbmodem112401 or 2101, ota_0)
-esptool.py --chip esp32s3 --port /dev/cu.usbmodem112401 --baud 921600 \
+# Flash Node [0] VAK:MEDUSA (2.06" 410x502 #1 on /dev/cu.usbmodem1101, ota_0 @ 0x00a00000)
+esptool.py --chip esp32s3 --port /dev/cu.usbmodem1101 --baud 921600 \
   write_flash -z --flash_mode dio --flash_freq 80m --flash_size 32MB \
   0x00a00000 .pio/build/esp32s3_amoled/firmware.bin
 
-# Flash Node [+1] OMNI (2.06" 410x502 #2 on /dev/cu.usbmodem101, ota_0)
-esptool.py --chip esp32s3 --port /dev/cu.usbmodem101 --baud 921600 \
+# Flash Node [+1] OMN:MEDUSA (2.06" 410x502 #2 on /dev/cu.usbmodem2101, ota_0 @ 0x00a00000)
+esptool.py --chip esp32s3 --port /dev/cu.usbmodem2101 --baud 921600 \
   write_flash -z --flash_mode dio --flash_freq 80m --flash_size 32MB \
   0x00a00000 .pio/build/esp32s3_amoled/firmware.bin
 
 # Dynamic USB discovery (--all scans all /dev/cu.usbmodem* ports automatically)
 uv run --with pyserial python bridge/s3_amoled_bridge.py --all --status
 uv run --with pyserial python bridge/s3_amoled_bridge.py --all --splash
-uv run --with pyserial python bridge/s3_amoled_bridge.py --all --track 8
+uv run --with pyserial python bridge/s3_amoled_bridge.py --all --track 15
 uv run --with pyserial python bridge/s3_amoled_bridge.py --listen --bt "Soundcore Select 4"
 ```
 

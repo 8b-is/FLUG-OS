@@ -1,19 +1,20 @@
 /*
- * FLUG-OS — Sovereign ESP32-S3 AMOLED Triad Cockpit (v0.7.0+impermanence)
- * {<3, <3, <3}+1 ~---> infinity  ::  ANICCA (IMPERMANENCE) x MARINESENSE (ms.8b.is)
+ * FLUG-OS — Sovereign ESP32-S3 AMOLED Triad Cockpit (v0.8.0+medusa-omni)
+ * {<3, <3, <3}+1 ~---> infinity  ::  MEDUSA-OMNI x ANICCA x MARINESENSE (ms.8b.is)
  *
- * Physical 3-Node Balanced-Ternary Triad {-1, 0, +1}:
- *   Node 0 [-1] ADAYE : Waveshare ESP32-S3-Touch-AMOLED-1.8  (368x448 SH8601, MAC ..:3B:C4)
- *   Node 1 [ 0] VAKED : Waveshare ESP32-S3-Touch-AMOLED-2.06 (410x502 CO5300, MAC ..:02:B0)
- *   Node 2 [+1] OMNI  : Waveshare ESP32-S3-Touch-AMOLED-2.06 (410x502 CO5300, MAC ..:02:B4)
+ * Physical 3-Node Balanced-Ternary MEDUSA Triad {-1, 0, +1}:
+ *   Node 0 [-1] ADAYE / ADA:MEDUSA (*)  : ESP32-S3-Touch-AMOLED-1.8  (368x448 SH8601, 432Hz, MAC 80:B5:4E:DB:3B:C4)
+ *   Node 1 [ 0] VAKED / VAK:MEDUSA (/\) : ESP32-S3-Touch-AMOLED-2.06 (410x502 CO5300, 528Hz, MAC 80:B5:4E:F2:02:B0)
+ *   Node 2 [+1] OMNI  / OMN:MEDUSA (oo) : ESP32-S3-Touch-AMOLED-2.06 (410x502 CO5300, 852Hz, MAC 80:B5:4E:F2:02:B4)
  *
- * MarineSense (ms.8b.is) + Impermanence (Anicca / Turritopsis Transdifferentiation):
+ * MarineSense (ms.8b.is) + Impermanence (Anicca) + wigle-triad (esp32.vaked.dev v0.42.1):
  *   - O(1) Marine Algorithm: zero-crossing period jitter J, energy E, harmonicity H,
  *     Salience S = w_e*E + w_j*(1/(1+J)) + w_h*H across 7 Bioluminescent Jellyfish
  *     Detector Nodes (Alpha, Beta, Gamma, Delta, Epsilon, Zeta, Eta) in the 64x64 Wave Pool.
  *   - Cognitive Ecphory & Anicca Decay: tidal viscosity (eta), Memory Reynolds (Re_M),
  *     ecphoric recall rings, and Turritopsis polyp transdifferentiation when a peer node
  *     is untethered or fades into silence.
+ *   - WebSerial Protocol Fusion (esp32.vaked.dev): PING, JSON, SCAN, TRIAD + W|/Q|/# JSON| telemetry.
  */
 
 #ifndef FLUGOS_S3_AMOLED_APP_H
@@ -37,13 +38,16 @@
 #define S3_MESH_CHANNEL 6
 #define S3_WAVE_HIST    88
 #define S3_LISSA_PTS    44
-#define S3_FAV_COUNT    14
+#define S3_FAV_COUNT    20
 #define S3_TAB_COUNT    5
 #define WAVE_POOL_N     64
 #define JELLY_COUNT     7
+#define S3_MAX_APS      16
+
+static const int kCrateCount = 20;
 
 // ============================================================
-// 14 Favourite Musics Crate (zoneInn / radio.vaked.dev parity)
+// 20 Favourite Musics Crate (zoneInn / radio.vaked.dev / family+1)
 // ============================================================
 typedef struct {
     const char* slug;
@@ -53,24 +57,32 @@ typedef struct {
     const char* key_sig;
     uint16_t    bpm;
     uint32_t    fnv_hash;
+    int8_t      trit;
 } S3FavTrack;
 
 static const S3FavTrack S3_FAVOURITES[S3_FAV_COUNT] = {
-    {"innerbloom",        "Innerbloom",            "RUFUS DU SOL",        "Prog House",   "F#m", 122, 0x8F41C2A9},
-    {"mahakala",          "Mahakala",              "Sovereign Cut",       "Deep Ritual",  "Dm",  118, 0x3D9E71B4},
-    {"take-five",         "Take Five",             "Dave Brubeck",        "5/4 Cool Jazz","Ebm", 174, 0xA7205E1C},
-    {"so-what",           "So What",               "Miles Davis",         "Modal Jazz",   "Dm",  136, 0x61B8904D},
-    {"time",              "Time",                  "Pink Floyd",          "Prog Rock",    "F#m", 120, 0xC4523E81},
-    {"clair-de-lune",     "Clair de Lune",         "Claude Debussy",      "Impressionist","Db",   66, 0x90E14A72},
-    {"gymnopedie-1",      "Gymnopedie No. 1",      "Erik Satie",          "Minimalist",   "D",    72, 0x5B3981D0},
-    {"golden-ratio-432",  "Golden Ratio 432xPhi",  "vaked.dev Studio",    "Harmonic",     "A432",108, 0x16180339},
-    {"beethoven-5th",     "Symphony No. 5 Op.67",  "L. van Beethoven",    "Classical",    "Cm",  108, 0x77E20508},
-    {"ode-to-joy",        "Ode to Joy (9th)",      "L. van Beethoven",    "Choral",       "D",   120, 0x9E3779B9},
-    {"fur-elise",         "Fur Elise WoO 59",      "L. van Beethoven",    "Bagatelle",    "Am",   76, 0x4A1D83C2},
-    {"pachelbel-canon",   "Canon in D Major",      "Johann Pachelbel",    "Baroque",      "D",    64, 0x2B992DD5},
-    {"midnight-sovereign","Midnight Sovereign",    "8b-is x vaked",       "Synthwave",    "Cm",  114, 0x8B15F00D},
-    {"ultrawhale-nand",   "Ultrawhale NAND Groove","peetpedro / HF",      "Ternary DSP",  "Phi", 128, 0xE5F34101},
+    {"innerbloom",         "Innerbloom",              "RUFUS DU SOL",        "Prog House",   "F#m", 122, 0x8F41C2A9,  1},
+    {"mahakala",           "Mahakala",                "Sovereign Cut",       "Deep Ritual",  "Dm",  118, 0x3D9E71B4, -1},
+    {"take-five",          "Take Five",               "Dave Brubeck",        "5/4 Cool Jazz","Ebm", 174, 0xA7205E1C,  0},
+    {"so-what",            "So What",                 "Miles Davis",         "Modal Jazz",   "Dm",  136, 0x61B8904D,  0},
+    {"time",               "Time",                    "Pink Floyd",          "Prog Rock",    "F#m", 120, 0xC4523E81, -1},
+    {"clair-de-lune",      "Clair de Lune",           "Claude Debussy",      "Impressionist","Db",   66, 0x90E14A72, -1},
+    {"gymnopedie-1",       "Gymnopedie No. 1",        "Erik Satie",          "Minimalist",   "D",    72, 0x5B3981D0,  0},
+    {"golden-ratio-432",   "Golden Ratio 432xPhi",    "vaked.dev Studio",    "Harmonic",     "A432",108, 0x16180339,  1},
+    {"beethoven-5th",      "Symphony No. 5 Op.67",    "L. van Beethoven",    "Classical",    "Cm",  108, 0x77E20508,  1},
+    {"ode-to-joy",         "Ode to Joy (9th)",        "L. van Beethoven",    "Choral",       "D",   120, 0x9E3779B9,  1},
+    {"fur-elise",          "Fur Elise WoO 59",        "L. van Beethoven",    "Bagatelle",    "Am",   76, 0x4A1D83C2,  0},
+    {"pachelbel-canon",    "Canon in D Major",        "Johann Pachelbel",    "Baroque",      "D",    64, 0x2B992DD5,  0},
+    {"midnight-sovereign", "Midnight Sovereign",      "8b-is x vaked",       "Synthwave",    "Cm",  114, 0x8B15F00D, -1},
+    {"ultrawhale-nand",    "Ultrawhale NAND Groove",  "peetpedro / HF",      "Ternary DSP",  "Phi", 128, 0xE5F34101,  1},
+    {"teardrop",           "Teardrop (Family+1)",     "Massive Attack",      "Trip-Hop",     "Am",   77, 0x7E4AD20F,  1},
+    {"hunger-of-the-pine", "Hunger of the Pine",      "alt-J",               "Art Indie",    "Cm",   85, 0x4B82E91A, -1},
+    {"left-hand-free",     "Left Hand Free (#1 Muse)","alt-J",               "Indie Rock",   "Em",  106, 0x1F5E9C33,  1},
+    {"glue",               "GLUE",                    "BICEP",               "UK Breakbeat", "Cm",  130, 0x9A6D44C0,  0},
+    {"oblivion",           "Oblivion",                "Grimes",              "Synth-Pop",    "Eb",  156, 0xC3091B7E,  1},
+    {"not-like-before",    "Not Like Before",         "The Four Owls",       "UK Boom-Bap",  "F#m",  90, 0x5D17A8E2, -1},
 };
+#define kFavouriteCrate S3_FAVOURITES
 
 // ============================================================
 // 2D Wave Pool + Tidal Impermanence Damping (MEM-8 / baye-rust)
@@ -285,14 +297,35 @@ typedef struct {
     unsigned long last_ms;
 } S3TriadPeerState;
 
-static uint8_t          g_triad_self_id   = 0;   // 0=adaye, 1=vaked, 2=omni
-static int8_t           g_triad_self_pole = -1;  // -1, 0, +1
-static const char*      g_triad_persona   = "adaye";
-static const char*      g_triad_ROLE      = "SUBCRITICAL";
+static uint8_t          g_triad_self_id       = 0;   // 0=adaye, 1=vaked, 2=omni
+static int8_t           g_triad_self_pole     = -1;  // -1, 0, +1
+static const char*      g_triad_persona       = "adaye";
+static const char*      g_triad_ROLE          = "SUBCRITICAL [-1]";
+static const char*      g_medusa_node         = "ADA:MEDUSA";
+static const char*      g_medusa_vertex       = "*";
+static const char*      g_medusa_vertex_json  = "*";
+static const char*      g_medusa_archetype    = "ROOT-ALEXANDRA";
+static uint16_t         g_medusa_freq_hz      = 432;
 static S3TriadPeerState g_triad_nodes[3];
 
 static volatile uint32_t g_s3_peer_rx_cnt = 0;
 static bool              g_s3_espnow_ok   = false;
+
+typedef struct {
+    bool    used;
+    uint8_t bssid[6];
+    char    ssid[33];
+    uint8_t ch;
+    int8_t  rssi;
+} S3MedusaAp;
+
+static S3MedusaAp g_medusa_aps[S3_MAX_APS];
+static uint8_t    g_medusa_ap_count  = 0;
+static uint32_t   g_medusa_scan_seq  = 1;
+static float      g_medusa_entropy   = 0.0f;
+static float      g_medusa_coherence = 0.0f;
+static int        g_medusa_mean_rssi = -62;
+static char       g_medusa_trits[12] = "+-0+0--+0";
 
 // ============================================================
 // Runtime State
@@ -342,21 +375,38 @@ static float    g_s3_phase        = 0.0f;
 // ============================================================
 static void s3_triad_assign_identity() {
     memset(g_triad_nodes, 0, sizeof(g_triad_nodes));
+    memset(g_medusa_aps, 0, sizeof(g_medusa_aps));
+    g_medusa_ap_count = 0;
     if (g_board_is_18 || g_s3_mac[5] == 0xC4) {
-        g_triad_self_id   = 0;
-        g_triad_self_pole = -1;
-        g_triad_persona   = "adaye";
-        g_triad_ROLE      = "SUBCRITICAL [-1]";
+        g_triad_self_id      = 0;
+        g_triad_self_pole    = -1;
+        g_triad_persona      = "adaye";
+        g_triad_ROLE         = "SUBCRITICAL [-1]";
+        g_medusa_node        = "ADA:MEDUSA";
+        g_medusa_vertex      = "*";
+        g_medusa_vertex_json = "*";
+        g_medusa_archetype   = "ROOT-ALEXANDRA";
+        g_medusa_freq_hz     = 432;
     } else if (g_s3_mac[5] == 0xB0) {
-        g_triad_self_id   = 1;
-        g_triad_self_pole = 0;
-        g_triad_persona   = "vaked";
-        g_triad_ROLE      = "ZERO-POINT [0]";
+        g_triad_self_id      = 1;
+        g_triad_self_pole    = 0;
+        g_triad_persona      = "vaked";
+        g_triad_ROLE         = "ZERO-POINT [0]";
+        g_medusa_node        = "VAK:MEDUSA";
+        g_medusa_vertex      = "/\\";
+        g_medusa_vertex_json = "/\\\\";
+        g_medusa_archetype   = "PILLAR-CHRIS";
+        g_medusa_freq_hz     = 528;
     } else {
-        g_triad_self_id   = 2;
-        g_triad_self_pole = +1;
-        g_triad_persona   = "omni";
-        g_triad_ROLE      = "SUPERCRITICAL [+1]";
+        g_triad_self_id      = 2;
+        g_triad_self_pole    = +1;
+        g_triad_persona      = "omni";
+        g_triad_ROLE         = "SUPERCRITICAL [+1]";
+        g_medusa_node        = "OMN:MEDUSA";
+        g_medusa_vertex      = "oo";
+        g_medusa_vertex_json = "oo";
+        g_medusa_archetype   = "INFINITY-PETER-NATE";
+        g_medusa_freq_hz     = 852;
     }
     g_triad_nodes[g_triad_self_id].online    = true;
     g_triad_nodes[g_triad_self_id].ttl_q8    = 255;
@@ -479,6 +529,33 @@ static void IRAM_ATTR s3_wifi_promisc_cb(void* buf, wifi_promiscuous_pkt_type_t 
                     if (printable) {
                         memcpy((void*)g_s3_last_ssid, &payload[off + 2], tlen);
                         g_s3_last_ssid[tlen] = '\0';
+
+                        // Record in MEDUSA passive beacon table for SCAN / WebSerial
+                        int slot = -1;
+                        for (int a = 0; a < (int)g_medusa_ap_count; a++) {
+                            if (memcmp(g_medusa_aps[a].bssid, hdr->addr3, 6) == 0) {
+                                slot = a;
+                                break;
+                            }
+                        }
+                        if (slot < 0) {
+                            if (g_medusa_ap_count < S3_MAX_APS) {
+                                slot = g_medusa_ap_count++;
+                            } else {
+                                slot = (int)(g_s3_total_pkts % S3_MAX_APS);
+                            }
+                        }
+                        g_medusa_aps[slot].used = true;
+                        memcpy(g_medusa_aps[slot].bssid, hdr->addr3, 6);
+                        memcpy(g_medusa_aps[slot].ssid, &payload[off + 2], tlen);
+                        g_medusa_aps[slot].ssid[tlen] = '\0';
+                        for (uint8_t k = 0; k < tlen; k++) {
+                            if (g_medusa_aps[slot].ssid[k] == '|' || g_medusa_aps[slot].ssid[k] == '\\') {
+                                g_medusa_aps[slot].ssid[k] = '_';
+                            }
+                        }
+                        g_medusa_aps[slot].ch   = ch;
+                        g_medusa_aps[slot].rssi = rssi;
                     }
                     break;
                 }
@@ -628,7 +705,46 @@ static void s3_step_physics() {
         g_s3_lissa_y[i] = (int16_t)(sinf(freq_y * t) * 48.0f);
     }
 
-    // 6. Render TernarySeam radiation matrix
+    // 6. Compute wigle-triad N=NP Shannon entropy, Kuramoto coherence, and 9-trit vector
+    uint32_t pkt_sum = 0;
+    long rssi_sum    = 0;
+    int active_ch    = 0;
+    float phase_sin  = 0.0f;
+    float phase_cos  = 0.0f;
+    for (int c = 0; c < S3_MAX_CHANNEL; c++) {
+        pkt_sum += g_s3_ch_pkts[c];
+        if (g_s3_ch_pkts[c] > 0) {
+            rssi_sum += g_s3_ch_rssi[c];
+            active_ch++;
+            float theta = (float)((c + 1) * 2.0f * 3.14159265f / 14.0f) + (float)(g_s3_ch_rssi[c] + 100) * 0.05f;
+            phase_sin += sinf(theta);
+            phase_cos += cosf(theta);
+        }
+    }
+    if (pkt_sum > 0 && active_ch > 0) {
+        float ent = 0.0f;
+        for (int c = 0; c < S3_MAX_CHANNEL; c++) {
+            if (g_s3_ch_pkts[c] > 0) {
+                float p = (float)g_s3_ch_pkts[c] / (float)pkt_sum;
+                ent -= p * (logf(p) / 0.69314718f);
+            }
+        }
+        g_medusa_entropy   = ent;
+        g_medusa_mean_rssi = (int)(rssi_sum / active_ch);
+        g_medusa_coherence = sqrtf(phase_sin * phase_sin + phase_cos * phase_cos) / (float)active_ch;
+    } else {
+        g_medusa_entropy   = 0.42f;
+        g_medusa_mean_rssi = (int)g_s3_last_rssi;
+        g_medusa_coherence = 0.78f;
+    }
+    for (int t = 0; t < 9; t++) {
+        uint32_t c1 = g_s3_ch_pkts[t % S3_MAX_CHANNEL];
+        uint32_t c2 = g_s3_ch_pkts[(t + 4) % S3_MAX_CHANNEL];
+        g_medusa_trits[t] = (c1 > c2) ? '+' : ((c1 < c2) ? '-' : '0');
+    }
+    g_medusa_trits[9] = '\0';
+
+    // 7. Render TernarySeam radiation matrix
     ternary_seam_render(&g_s3_seam_buf, &g_s3_seam_mat);
     g_s3_witness_seq++;
 }
@@ -1248,8 +1364,8 @@ static void s3_render_tab_qwave(S3Canvas& c) {
     int slot_y = 286;
     int slot_h = (H - 56) - slot_y;
     c.fill_card(8, slot_y, cw, slot_h, COL_BG_ELEV, COL_MINT);
-    c.draw_text(18, slot_y + 7, "ANICCA // MARINESENSE x TRIAD INFINITY", COL_MINT, 1);
-    c.draw_text(18, slot_y + 22, "ACTIVE : FLUG-OS v0.7.0+impermanence", COL_TEXT, 1);
+    c.draw_text(18, slot_y + 7, "MEDUSA-OMNI // MARINESENSE x ANICCA", COL_MINT, 1);
+    c.draw_text(18, slot_y + 22, "ACTIVE : FLUG-OS v0.8.0+medusa-omni", COL_TEXT, 1);
 
     int btn_y = slot_y + slot_h - 34;
     int bw    = (cw - 28) / 2;
@@ -1299,12 +1415,12 @@ static void s3_render_frame() {
 // ============================================================
 static void s3_emit_track_event() {
     const S3FavTrack* t = &S3_FAVOURITES[g_s3_track_idx];
-    Serial.printf("{\"event\":\"zoneinn_track\",\"persona\":\"%s\",\"trit\":%d,\"playing\":%d,\"idx\":%d,"
+    Serial.printf("{\"event\":\"zoneinn_track\",\"persona\":\"%s\",\"medusa_node\":\"%s\",\"trit\":%d,\"playing\":%d,\"idx\":%d,"
                   "\"slug\":\"%s\",\"title\":\"%s\",\"artist\":\"%s\","
-                  "\"bpm\":%u,\"key\":\"%s\",\"qt\":\"%02x\"}\n",
-                  g_triad_persona, (int)g_triad_self_pole,
+                  "\"bpm\":%u,\"key\":\"%s\",\"track_trit\":%d,\"qt\":\"%02x\"}\n",
+                  g_triad_persona, g_medusa_node, (int)g_triad_self_pole,
                   g_s3_playing ? 1 : 0, g_s3_track_idx + 1,
-                  t->slug, t->title, t->artist, t->bpm, t->key_sig, g_imu.qt_byte);
+                  t->slug, t->title, t->artist, t->bpm, t->key_sig, (int)t->trit, g_imu.qt_byte);
     s3_espnow_broadcast(32, 32, 5200);
 }
 
@@ -1379,8 +1495,8 @@ static void s3_handle_touch() {
                 esp_wifi_set_channel(g_s3_channel, WIFI_SECOND_CHAN_NONE);
             } else {
                 s3_espnow_broadcast(32, 32, 6800);
-                Serial.printf("{\"capsule_id\":\"triad-s3-%lu\",\"persona\":\"%s\",\"trit\":%d,\"qt\":\"%02x\"}\n",
-                              (unsigned long)g_s3_total_pkts, g_triad_persona,
+                Serial.printf("{\"capsule_id\":\"triad-s3-%lu\",\"persona\":\"%s\",\"medusa_node\":\"%s\",\"trit\":%d,\"qt\":\"%02x\"}\n",
+                              (unsigned long)g_s3_total_pkts, g_triad_persona, g_medusa_node,
                               (int)g_triad_self_pole, g_imu.qt_byte);
             }
         }
@@ -1400,61 +1516,140 @@ static void s3_handle_touch() {
 }
 
 // ============================================================
-// Serial Command Handler (compatible with s3_amoled_bridge.py)
+// Serial & WebSerial Command Handler
+// (compatible with bridge/s3_amoled_bridge.py AND esp32.vaked.dev)
 // ============================================================
-static void s3_handle_serial_command(const char* line) {
-    if (strcmp(line, "status") == 0 || strcmp(line, "stats") == 0) {
-        const S3FavTrack* t = &S3_FAVOURITES[g_s3_track_idx];
-        Serial.printf("{\"board\":\"%s\",\"persona\":\"%s\",\"trit\":%d,\"triad_online\":%u,"
-                      "\"anicca_ttl\":[%u,%u,%u],"
-                      "\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\",\"lcd\":\"%ux%u\","
-                      "\"version\":\"" FLUGOS_FULL_VERSION "\","
-                      "\"tab\":%u,\"pkts\":%lu,\"mgmt\":%lu,\"ctrl\":%lu,\"data\":%lu,"
-                      "\"ch\":%d,\"hop\":%d,\"rssi\":%d,\"ssid\":\"%s\","
-                      "\"track_idx\":%d,\"track\":\"%s\",\"artist\":\"%s\",\"bpm\":%u,"
-                      "\"qt\":\"%02x\",\"ax\":%.2f,\"ay\":%.2f,\"az\":%.2f,\"sickness\":%.2f,"
-                      "\"salience\":%u,\"jitter\":%u,\"viscosity\":%.2f,\"reynolds\":%u,\"recalls\":%lu,"
-                      "\"splashes\":%lu,\"peer_rx\":%lu,\"es8311\":%d,"
-                      "\"batt_mv\":%u,\"batt_pct\":%u}\n",
-                      g_board_is_18 ? "ESP32-S3-Touch-AMOLED-1.8" : "ESP32-S3-Touch-AMOLED-2.06",
-                      g_triad_persona, (int)g_triad_self_pole, s3_triad_online_count(),
-                      g_triad_nodes[0].ttl_q8, g_triad_nodes[1].ttl_q8, g_triad_nodes[2].ttl_q8,
-                      g_s3_mac[0], g_s3_mac[1], g_s3_mac[2], g_s3_mac[3], g_s3_mac[4], g_s3_mac[5],
-                      g_lcd_w, g_lcd_h,
-                      g_s3_active_tab, (unsigned long)g_s3_total_pkts,
-                      (unsigned long)g_s3_mgmt_pkts, (unsigned long)g_s3_ctrl_pkts, (unsigned long)g_s3_data_pkts,
-                      g_s3_channel, g_s3_hopping ? 1 : 0, (int)g_s3_last_rssi, g_s3_last_ssid,
-                      g_s3_track_idx + 1, t->title, t->artist, t->bpm,
-                      g_imu.qt_byte, g_imu.ax, g_imu.ay, g_imu.az, g_imu.sickness,
-                      g_ms_mean_salience, g_ms_mean_jitter, g_ms_viscosity, g_ms_reynolds,
-                      (unsigned long)g_ms_ecphoric_recalls,
-                      (unsigned long)g_wp_splashes, (unsigned long)g_s3_peer_rx_cnt,
-                      g_es8311_ok ? 1 : 0,
-                      g_power.batt_mv, g_power.batt_pct);
-    } else if (strncmp(line, "tab ", 4) == 0) {
+static void s3_emit_status_json() {
+    const S3FavTrack* t = &S3_FAVOURITES[g_s3_track_idx];
+    Serial.printf("{\"board\":\"%s\",\"persona\":\"%s\",\"medusa_node\":\"%s\",\"vertex\":\"%s\","
+                  "\"archetype\":\"%s\",\"freq_hz\":%u,\"trit\":%d,\"triad_online\":%u,"
+                  "\"anicca_ttl\":[%u,%u,%u],"
+                  "\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\",\"lcd\":\"%ux%u\","
+                  "\"version\":\"" FLUGOS_FULL_VERSION "\","
+                  "\"tab\":%u,\"pkts\":%lu,\"mgmt\":%lu,\"ctrl\":%lu,\"data\":%lu,"
+                  "\"ch\":%d,\"hop\":%d,\"rssi\":%d,\"ssid\":\"%s\","
+                  "\"track_idx\":%d,\"track\":\"%s\",\"artist\":\"%s\",\"bpm\":%u,\"crate_count\":%d,"
+                  "\"qt\":\"%02x\",\"ax\":%.2f,\"ay\":%.2f,\"az\":%.2f,\"sickness\":%.2f,"
+                  "\"salience\":%u,\"jitter\":%u,\"viscosity\":%.2f,\"reynolds\":%u,\"recalls\":%lu,"
+                  "\"splashes\":%lu,\"peer_rx\":%lu,\"es8311\":%d,"
+                  "\"batt_mv\":%u,\"batt_pct\":%u}\n",
+                  g_board_is_18 ? "ESP32-S3-Touch-AMOLED-1.8" : "ESP32-S3-Touch-AMOLED-2.06",
+                  g_triad_persona, g_medusa_node, g_medusa_vertex_json,
+                  g_medusa_archetype, (unsigned)g_medusa_freq_hz,
+                  (int)g_triad_self_pole, s3_triad_online_count(),
+                  g_triad_nodes[0].ttl_q8, g_triad_nodes[1].ttl_q8, g_triad_nodes[2].ttl_q8,
+                  g_s3_mac[0], g_s3_mac[1], g_s3_mac[2], g_s3_mac[3], g_s3_mac[4], g_s3_mac[5],
+                  g_lcd_w, g_lcd_h,
+                  g_s3_active_tab, (unsigned long)g_s3_total_pkts,
+                  (unsigned long)g_s3_mgmt_pkts, (unsigned long)g_s3_ctrl_pkts, (unsigned long)g_s3_data_pkts,
+                  g_s3_channel, g_s3_hopping ? 1 : 0, (int)g_s3_last_rssi, g_s3_last_ssid,
+                  g_s3_track_idx + 1, t->title, t->artist, t->bpm, S3_FAV_COUNT,
+                  g_imu.qt_byte, g_imu.ax, g_imu.ay, g_imu.az, g_imu.sickness,
+                  g_ms_mean_salience, g_ms_mean_jitter, g_ms_viscosity, g_ms_reynolds,
+                  (unsigned long)g_ms_ecphoric_recalls,
+                  (unsigned long)g_wp_splashes, (unsigned long)g_s3_peer_rx_cnt,
+                  g_es8311_ok ? 1 : 0,
+                  g_power.batt_mv, g_power.batt_pct);
+}
+
+static void s3_emit_medusa_json() {
+    const S3FavTrack* t = &S3_FAVOURITES[g_s3_track_idx];
+    uint8_t n_ap = (g_medusa_ap_count > 0) ? g_medusa_ap_count : 1;
+    Serial.printf("# JSON|{\"node\":\"%s\",\"vertex\":\"%s\",\"archetype\":\"%s\","
+                  "\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\","
+                  "\"version\":\"" FLUGOS_FULL_VERSION "\",\"triad_version\":\"0.42.1\","
+                  "\"freq_hz\":%u,\"trit\":%d,\"persona\":\"%s\","
+                  "\"seq\":%lu,\"networks\":%u,\"mean_rssi\":%d,"
+                  "\"entropy_bits\":%.4f,\"n_np_coherence\":%.4f,\"trits\":\"%s\","
+                  "\"salience\":%u,\"reynolds\":%u,\"anicca_ttl\":[%u,%u,%u],"
+                  "\"track_idx\":%d,\"track\":\"%s\",\"artist\":\"%s\",\"bpm\":%u,"
+                  "\"free_heap\":%lu,\"uptime_ms\":%lu,\"mode\":\"PASSIVE_STA_ONLY\"}\n",
+                  g_medusa_node, g_medusa_vertex_json, g_medusa_archetype,
+                  g_s3_mac[0], g_s3_mac[1], g_s3_mac[2], g_s3_mac[3], g_s3_mac[4], g_s3_mac[5],
+                  (unsigned)g_medusa_freq_hz, (int)g_triad_self_pole, g_triad_persona,
+                  (unsigned long)g_medusa_scan_seq, (unsigned)n_ap, (int)g_medusa_mean_rssi,
+                  g_medusa_entropy, g_medusa_coherence, g_medusa_trits,
+                  g_ms_mean_salience, g_ms_reynolds,
+                  g_triad_nodes[0].ttl_q8, g_triad_nodes[1].ttl_q8, g_triad_nodes[2].ttl_q8,
+                  g_s3_track_idx + 1, t->title, t->artist, t->bpm,
+                  (unsigned long)ESP.getFreeHeap(), (unsigned long)millis());
+}
+
+static void s3_emit_medusa_scan() {
+    g_medusa_scan_seq++;
+    uint8_t n_ap = g_medusa_ap_count;
+    if (n_ap > 0) {
+        for (uint8_t i = 0; i < n_ap; i++) {
+            const S3MedusaAp* ap = &g_medusa_aps[i];
+            if (!ap->used) continue;
+            Serial.printf("W|%02X:%02X:%02X:%02X:%02X:%02X|%s|WPA2-PSK|%u|%d\n",
+                          ap->bssid[0], ap->bssid[1], ap->bssid[2],
+                          ap->bssid[3], ap->bssid[4], ap->bssid[5],
+                          ap->ssid, (unsigned)ap->ch, (int)ap->rssi);
+        }
+    } else {
+        n_ap = 1;
+        Serial.printf("W|%02X:%02X:%02X:%02X:%02X:%02X|%s|WPA2-PSK|%d|%d\n",
+                      g_s3_mac[0], g_s3_mac[1], g_s3_mac[2],
+                      g_s3_mac[3], g_s3_mac[4], g_s3_mac[5],
+                      g_s3_last_ssid, g_s3_channel, (int)g_s3_last_rssi);
+    }
+    Serial.printf("Q|%s|%s|%02X:%02X:%02X:%02X:%02X:%02X|%lu|%u|%d|%.4f|%s|%.4f|%lu|%lu\n",
+                  g_medusa_node, g_medusa_vertex,
+                  g_s3_mac[0], g_s3_mac[1], g_s3_mac[2],
+                  g_s3_mac[3], g_s3_mac[4], g_s3_mac[5],
+                  (unsigned long)g_medusa_scan_seq, (unsigned)n_ap, (int)g_medusa_mean_rssi,
+                  g_medusa_entropy, g_medusa_trits, g_medusa_coherence,
+                  (unsigned long)ESP.getFreeHeap(), (unsigned long)millis());
+    s3_emit_medusa_json();
+}
+
+static void s3_handle_serial(const char* line) {
+    if (strcasecmp(line, "PING") == 0) {
+        Serial.printf("# PONG|%s|%02X:%02X:%02X:%02X:%02X:%02X|%lu\n",
+                      g_medusa_node,
+                      g_s3_mac[0], g_s3_mac[1], g_s3_mac[2],
+                      g_s3_mac[3], g_s3_mac[4], g_s3_mac[5],
+                      (unsigned long)millis());
+    } else if (strcmp(line, "status") == 0 || strcmp(line, "stats") == 0) {
+        s3_emit_status_json();
+        s3_emit_medusa_json();
+    } else if (strcasecmp(line, "JSON") == 0 || strcasecmp(line, "STATUS") == 0) {
+        s3_emit_medusa_json();
+        s3_emit_status_json();
+    } else if (strcasecmp(line, "SCAN") == 0) {
+        s3_emit_medusa_scan();
+    } else if (strcasecmp(line, "TRIAD") == 0) {
+        Serial.println("# TRIAD|ADA:MEDUSA(80:B5:4E:DB:3B:C4,*,ROOT-ALEXANDRA,432Hz)|VAK:MEDUSA(80:B5:4E:F2:02:B0,/\\,PILLAR-CHRIS,528Hz)|OMN:MEDUSA(80:B5:4E:F2:02:B4,oo,INFINITY-PETER-NATE,852Hz)");
+        Serial.printf("# ANICCA|ADA:%s(ttl=%u)|VAK:%s(ttl=%u)|OMN:%s(ttl=%u)|online=%u/3|crate=%d\n",
+                      g_triad_nodes[0].ttl_q8 ? "MEDUSA" : "POLYP", g_triad_nodes[0].ttl_q8,
+                      g_triad_nodes[1].ttl_q8 ? "MEDUSA" : "POLYP", g_triad_nodes[1].ttl_q8,
+                      g_triad_nodes[2].ttl_q8 ? "MEDUSA" : "POLYP", g_triad_nodes[2].ttl_q8,
+                      s3_triad_online_count(), S3_FAV_COUNT);
+    } else if (strncasecmp(line, "tab ", 4) == 0) {
         int tab = atoi(line + 4);
         if (tab >= 0 && tab < S3_TAB_COUNT) g_s3_active_tab = (uint8_t)tab;
         Serial.printf("{\"cmd\":\"tab\",\"val\":%u}\n", g_s3_active_tab);
-    } else if (strncmp(line, "splash", 6) == 0) {
+    } else if (strncasecmp(line, "splash", 6) == 0) {
         s3_wave_pool_splash(32, 32, 7800, 6);
         s3_espnow_broadcast(32, 32, 7800);
-        Serial.printf("{\"cmd\":\"splash\",\"persona\":\"%s\",\"splashes\":%lu,\"peer_rx\":%lu,\"recalls\":%lu}\n",
-                      g_triad_persona, (unsigned long)g_wp_splashes,
+        Serial.printf("{\"cmd\":\"splash\",\"persona\":\"%s\",\"medusa_node\":\"%s\",\"splashes\":%lu,\"peer_rx\":%lu,\"recalls\":%lu}\n",
+                      g_triad_persona, g_medusa_node, (unsigned long)g_wp_splashes,
                       (unsigned long)g_s3_peer_rx_cnt, (unsigned long)g_ms_ecphoric_recalls);
-    } else if (strncmp(line, "track ", 6) == 0) {
+    } else if (strncasecmp(line, "track ", 6) == 0) {
         int idx = atoi(line + 6) - 1;
         if (idx >= 0 && idx < S3_FAV_COUNT) {
             g_s3_track_idx = idx;
             g_s3_playing = true;
             s3_emit_track_event();
         }
-    } else if (strcmp(line, "next") == 0) {
+    } else if (strcasecmp(line, "next") == 0) {
         g_s3_track_idx = (g_s3_track_idx + 1) % S3_FAV_COUNT;
         s3_emit_track_event();
-    } else if (strcmp(line, "prev") == 0) {
+    } else if (strcasecmp(line, "prev") == 0) {
         g_s3_track_idx = (g_s3_track_idx + S3_FAV_COUNT - 1) % S3_FAV_COUNT;
         s3_emit_track_event();
-    } else if (strncmp(line, "ch ", 3) == 0) {
+    } else if (strncasecmp(line, "ch ", 3) == 0) {
         int ch = atoi(line + 3);
         if (ch >= 1 && ch <= S3_MAX_CHANNEL) {
             g_s3_channel = ch;
@@ -1462,19 +1657,23 @@ static void s3_handle_serial_command(const char* line) {
             esp_wifi_set_channel(g_s3_channel, WIFI_SECOND_CHAN_NONE);
             Serial.printf("{\"cmd\":\"ch\",\"val\":%d}\n", g_s3_channel);
         }
-    } else if (strcmp(line, "hop") == 0) {
+    } else if (strcasecmp(line, "hop") == 0) {
         g_s3_hopping = !g_s3_hopping;
         Serial.printf("{\"cmd\":\"hop\",\"en\":%d}\n", g_s3_hopping ? 1 : 0);
-    } else if (strncmp(line, "mode ", 5) == 0) {
+    } else if (strncasecmp(line, "mode ", 5) == 0) {
         set_wave_mode(line + 5);
         Serial.printf("{\"cmd\":\"mode\",\"val\":\"%s\"}\n", line + 5);
-    } else if (strncmp(line, "boot ", 5) == 0) {
+    } else if (strncasecmp(line, "boot ", 5) == 0) {
         s3_boot_partition(line + 5);
-    } else if (strncmp(line, "bright ", 7) == 0) {
+    } else if (strncasecmp(line, "bright ", 7) == 0) {
         int b = atoi(line + 7);
         if (b >= 10 && b <= 255) s3_amoled_set_brightness((uint8_t)b);
         Serial.printf("{\"cmd\":\"bright\",\"val\":%d}\n", b);
     }
+}
+
+static inline void s3_handle_serial_command(const char* line) {
+    s3_handle_serial(line);
 }
 
 // ============================================================
@@ -1537,22 +1736,25 @@ static void s3_amoled_setup() {
 
     Serial.printf("\r\n");
     Serial.printf("  ╔══════════════════════════════════════════════════════════╗\r\n");
-    Serial.printf("  ║  FLUG-OS {-1, 0, +1}  " FLUGOS_FULL_VERSION "  MARINESENSE   ║\r\n");
-    Serial.printf("  ║  Node [%+d] %-6s : %-24s (%ux%u) ║\r\n",
-                  (int)g_triad_self_pole, g_triad_persona,
+    Serial.printf("  ║  FLUG-OS {-1, 0, +1}  " FLUGOS_FULL_VERSION "  MARINESENSE     ║\r\n");
+    Serial.printf("  ║  Node [%+d] %-10s : %-20s (%ux%u) ║\r\n",
+                  (int)g_triad_self_pole, g_medusa_node,
                   is_18 ? "ESP32-S3-AMOLED-1.8" : "ESP32-S3-AMOLED-2.06",
                   g_lcd_w, g_lcd_h);
     Serial.printf("  ╚══════════════════════════════════════════════════════════╝\r\n");
-    Serial.printf("{\"boot\":\"ok\",\"board\":\"%s\",\"persona\":\"%s\",\"trit\":%d,"
+    Serial.printf("{\"boot\":\"ok\",\"board\":\"%s\",\"persona\":\"%s\",\"medusa_node\":\"%s\","
+                  "\"vertex\":\"%s\",\"archetype\":\"%s\",\"freq_hz\":%u,\"trit\":%d,"
                   "\"lcd\":\"%ux%u\",\"pmic\":%d,\"amoled\":%d,\"imu\":%d,\"es8311\":%d,\"espnow\":%d,"
                   "\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\"}\r\n",
                   is_18 ? "ESP32-S3-Touch-AMOLED-1.8" : "ESP32-S3-Touch-AMOLED-2.06",
-                  g_triad_persona, (int)g_triad_self_pole,
+                  g_triad_persona, g_medusa_node, g_medusa_vertex_json, g_medusa_archetype,
+                  (unsigned)g_medusa_freq_hz, (int)g_triad_self_pole,
                   g_lcd_w, g_lcd_h,
                   pmic_ok ? 1 : 0, lcd_ok ? 1 : 0, imu_ok ? 1 : 0,
                   audio_ok ? 1 : 0, g_s3_espnow_ok ? 1 : 0,
                   g_s3_mac[0], g_s3_mac[1], g_s3_mac[2],
                   g_s3_mac[3], g_s3_mac[4], g_s3_mac[5]);
+    s3_emit_medusa_json();
 }
 
 static void s3_amoled_loop() {
@@ -1615,7 +1817,7 @@ static void s3_amoled_loop() {
         if (ch == '\n' || ch == '\r') {
             if (cmd_pos > 0) {
                 cmd_buf[cmd_pos] = '\0';
-                s3_handle_serial_command(cmd_buf);
+                s3_handle_serial(cmd_buf);
                 cmd_pos = 0;
             }
         } else if (cmd_pos < sizeof(cmd_buf) - 1) {
