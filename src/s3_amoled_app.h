@@ -38,13 +38,13 @@
 #define S3_MESH_CHANNEL 6
 #define S3_WAVE_HIST    88
 #define S3_LISSA_PTS    44
-#define S3_FAV_COUNT    20
+#define S3_FAV_COUNT    21
 #define S3_TAB_COUNT    5
 #define WAVE_POOL_N     64
 #define JELLY_COUNT     7
 #define S3_MAX_APS      16
 
-static const int kCrateCount = 20;
+static const int kCrateCount = 21;
 
 // ============================================================
 // 20 Favourite Musics Crate (zoneInn / radio.vaked.dev / family+1)
@@ -81,6 +81,7 @@ static const S3FavTrack S3_FAVOURITES[S3_FAV_COUNT] = {
     {"glue",               "GLUE",                    "BICEP",               "UK Breakbeat", "Cm",  130, 0x9A6D44C0,  0},
     {"oblivion",           "Oblivion",                "Grimes",              "Synth-Pop",    "Eb",  156, 0xC3091B7E,  1},
     {"not-like-before",    "Not Like Before",         "The Four Owls",       "UK Boom-Bap",  "F#m",  90, 0x5D17A8E2, -1},
+    {"zenebuddhizmus",     "Zenebuddhizmus",          "Akkezdet Phiai",      "Magyar Dharma","Dm",   92, 0xA1CE2010,  1},
 };
 #define kFavouriteCrate S3_FAVOURITES
 
