@@ -344,6 +344,7 @@ static char       g_kompress_hex[27] = "88a1c3f05b2e917460d2c8e144";
 static uint8_t    g_viz_mode         = 0;
 static uint8_t    g_viz_kluver       = 0;
 static uint32_t   g_tts_speak_count  = 1;
+static char       g_engine_line[48]  = "qt:66|69632|2712|11";
 
 // ============================================================
 // Runtime State
@@ -1528,6 +1529,9 @@ static void s3_render_tab_viz_tts(S3Canvas& c) {
     snprintf(tts_stat, sizeof(tts_stat), "ES8311:%s  SPOKEN:%lu  CHORD:%uHz",
              g_es8311_ok ? "READY" : "I2C", (unsigned long)g_tts_speak_count, (unsigned)g_medusa_freq_hz);
     c.draw_text(18, tts_y + 40, tts_stat, COL_MINT, 1);
+    char eng_buf[48];
+    snprintf(eng_buf, sizeof(eng_buf), "8b-is-music+engine %s", g_engine_line);
+    c.draw_text(18, tts_y + 54, eng_buf, COL_GOLD, 1);
 
     int btn_y = tts_y + tts_h - 34;
     int bw    = (cw - 28) / 2;
@@ -1888,6 +1892,14 @@ static void s3_handle_serial(const char* line) {
         int b = atoi(line + 7);
         if (b >= 10 && b <= 255) s3_amoled_set_brightness((uint8_t)b);
         Serial.printf("{\"cmd\":\"bright\",\"val\":%d}\n", b);
+    } else if (strncasecmp(line, "engine ", 7) == 0) {
+        // ENGINE <qt>|<layers>|<family_hz>|<ct000 bits>  (fed by 8b-is-music + 8b-is-engine via wiglewww)
+        strncpy(g_engine_line, line + 7, sizeof(g_engine_line) - 1);
+        g_engine_line[sizeof(g_engine_line) - 1] = '\0';
+        s3_wave_pool_splash(32, 32, 8000, 6);
+        s3_espnow_broadcast(32, 32, 8000);
+        Serial.printf("# ENGINE|{\"node\":\"%s\",\"feed\":\"%s\",\"src\":\"8b-is-music+8b-is-engine\"}\n",
+                      g_medusa_node, g_engine_line);
     } else if (strcasecmp(line, "VIZ") == 0 || strcasecmp(line, "ENTHEA") == 0 ||
                strncasecmp(line, "viz ", 4) == 0) {
         if (strlen(line) > 4) {
