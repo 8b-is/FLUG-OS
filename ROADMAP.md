@@ -236,3 +236,13 @@ ternary matrix → ayeOS inference → HF-MAC visualization.
    Verified with beehive's own decodeKompressSuperUltra: valid, integrityVerified (CRC32 + b3 ternary hash). Not authenticated.
 ✅ WUPZ seal command (same 32-byte frame as kernel8), verified against host wupz-core via GET /api/wupz
 ```
+
+## v1.3.0 — learn + speak (`v1.3.0+learn-speak`)
+
+```
+✅ On-device online learning (src/learn_env.h): 6 features (Wi-Fi networks, channel entropy, mean RSSI, IMU motion,
+   triad peers, packet rate) with running mean/variance per hour-of-day bucket; persisted in NVS across reboot.
+✅ Novelty (>3 sigma for this hour, per-feature 90 s cooldown) becomes a sentence: spoken on-chip (ES8311, 120 s cooldown)
+   and published as # LEARN|{...}. Serial: TIME <epoch> <tz>, LEARN [SPEAK 0|1 | RESET | SAVE]
+✅ Host (wiglewww, Rust) sets the clock, polls LEARN every 6 s and speaks new sentences with Kokoro; GET /api/learn
+```

@@ -1729,6 +1729,7 @@ static void s3_handle_touch() {
 // (compatible with wigle-triad/host-rs (Rust), esp32.vaked.dev, AND viz.vaked.dev)
 // ============================================================
 #include "phoenix_hive.h"
+#include "learn_env.h"
 
 static void s3_emit_viz_line() {
     float dose = 0.62f + 0.35f * (g_ms_mean_salience / 100.0f);
@@ -1926,6 +1927,15 @@ static void s3_handle_serial(const char* line) {
         Serial.printf("# WUPZ|{\"node\":\"%s\",\"ticks\":%lu,\"xor_fold\":\"0x%016llx\",\"popcount\":%lu,\"frame\":\"%s\",\"src\":\"wupz+kernel8\"}\n",
                       g_medusa_node, (unsigned long)ticks,
                       (unsigned long long)s3_wupz_xor_fold(fr, 32), (unsigned long)s3_wupz_popcount(fr, 32), hex);
+    } else if (strncasecmp(line, "time ", 5) == 0) {
+        learn_set_time(line + 5);
+    } else if (strncasecmp(line, "learn", 5) == 0) {
+        const char* a = line + 5;
+        while (*a == ' ') a++;
+        if (strncasecmp(a, "speak ", 6) == 0) { g_lrn_speak = atoi(a + 6) != 0; learn_save(); }
+        else if (strcasecmp(a, "reset") == 0) { memset(g_lrn, 0, sizeof(g_lrn)); g_lrn_total = 0; for (int i = 0; i < LRN_BUCKETS; i++) g_lrn_ready_said[i] = false; learn_save(); }
+        else if (strcasecmp(a, "save") == 0) { learn_save(); }
+        learn_emit_status();
     } else if (strcasecmp(line, "POWER") == 0 || strcasecmp(line, "PHOENIX") == 0) {
         phoenix_emit();
     } else if (strcasecmp(line, "BEEHIVE") == 0 || strcasecmp(line, "HIVE") == 0) {
@@ -2059,6 +2069,7 @@ static void s3_amoled_setup() {
                   audio_ok ? 1 : 0, g_s3_espnow_ok ? 1 : 0,
                   g_s3_mac[0], g_s3_mac[1], g_s3_mac[2],
                   g_s3_mac[3], g_s3_mac[4], g_s3_mac[5]);
+    learn_load();
     s3_emit_medusa_json();
     s3_emit_viz_line();
 }
@@ -2128,6 +2139,8 @@ static void s3_amoled_loop() {
         last_wave_ms = now;
         output_wave(g_s3_last_rssi, g_s3_last_type, g_s3_last_sub, now);
     }
+
+    learn_tick(now);
 
     // oxi-phoenix: Saving/Critical slow the render loop (frame_ms); otherwise full 25 fps.
     const unsigned long frame_period =
