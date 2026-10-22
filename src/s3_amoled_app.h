@@ -1728,6 +1728,8 @@ static void s3_handle_touch() {
 // Serial & WebSerial Command Handler
 // (compatible with wigle-triad/host-rs (Rust), esp32.vaked.dev, AND viz.vaked.dev)
 // ============================================================
+#include "phoenix_hive.h"
+
 static void s3_emit_viz_line() {
     float dose = 0.62f + 0.35f * (g_ms_mean_salience / 100.0f);
     Serial.printf("# VIZ|ENTHEA|node=%s|vertex=%s|freq=%uHz|trit=%+d|mode=%s|kluver=%s|"
@@ -1924,6 +1926,10 @@ static void s3_handle_serial(const char* line) {
         Serial.printf("# WUPZ|{\"node\":\"%s\",\"ticks\":%lu,\"xor_fold\":\"0x%016llx\",\"popcount\":%lu,\"frame\":\"%s\",\"src\":\"wupz+kernel8\"}\n",
                       g_medusa_node, (unsigned long)ticks,
                       (unsigned long long)s3_wupz_xor_fold(fr, 32), (unsigned long)s3_wupz_popcount(fr, 32), hex);
+    } else if (strcasecmp(line, "POWER") == 0 || strcasecmp(line, "PHOENIX") == 0) {
+        phoenix_emit();
+    } else if (strcasecmp(line, "BEEHIVE") == 0 || strcasecmp(line, "HIVE") == 0) {
+        hive_emit_frame();
     } else if (strncasecmp(line, "engine ", 7) == 0) {
         // ENGINE <qt>|<layers>|<family_hz>|<ct000 bits>  (fed by 8b-is-music + 8b-is-engine via wiglewww)
         strncpy(g_engine_line, line + 7, sizeof(g_engine_line) - 1);
@@ -2102,6 +2108,20 @@ static void s3_amoled_loop() {
     if (now - last_pmic_ms >= 2000) {
         last_pmic_ms = now;
         s3_axp2101_poll();
+        // oxi-phoenix battery budget: dim / slow / stop RF hopping when the cell is low; one alert per episode.
+        static PhoenixMode applied_mode = PH_UNKNOWN;
+        PhoenixBudget pb = phoenix_update((uint64_t)now);
+        if (pb.mode != applied_mode) {
+            applied_mode = pb.mode;
+            if (pb.mode == PH_SAVING || pb.mode == PH_CRITICAL) {
+                s3_amoled_set_brightness((uint8_t)((uint32_t)pb.brightness_pct * 255u / 100u));
+                g_s3_hopping = false;
+            } else if (pb.mode == PH_EXTERNAL) {
+                s3_amoled_set_brightness(0xD8);
+            }
+            phoenix_emit();
+        }
+        if (pb.alert) s3_es8311_speak(pb.alert == 2 ? "critical battery" : "low battery", g_medusa_freq_hz, g_triad_self_pole);
     }
 
     if (now - last_wave_ms >= 250) {
@@ -2109,7 +2129,10 @@ static void s3_amoled_loop() {
         output_wave(g_s3_last_rssi, g_s3_last_type, g_s3_last_sub, now);
     }
 
-    if (now - last_frame_ms >= 40) {
+    // oxi-phoenix: Saving/Critical slow the render loop (frame_ms); otherwise full 25 fps.
+    const unsigned long frame_period =
+        (g_ph_budget.mode == PH_SAVING || g_ph_budget.mode == PH_CRITICAL) ? g_ph_budget.frame_ms : 40;
+    if (now - last_frame_ms >= frame_period) {
         last_frame_ms = now;
         s3_touch_poll();
         s3_imu_poll();

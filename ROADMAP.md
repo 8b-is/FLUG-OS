@@ -225,3 +225,14 @@ ternary matrix → ayeOS inference → HF-MAC visualization.
 **Target:** v1.4.2 (full MLX-QUANT parity — packet → ternary → inference → viz)
 
 *Built by the 8b-is constellation. 🜂 {-1, 0, +1}*
+
+## v1.2.0 — oxi-phoenix power policy + beehive frames (`v1.2.0+phoenix-hive-wupz`)
+
+```
+✅ oxi-phoenix battery policy (baye-rust power_policy.rs) ported to C++: Mode ExternalPower/Listening/Saving/Critical,
+   3 s hysteresis, one alert per discharge episode; Saving/Critical dim, slow the render loop and stop channel hopping.
+   Serial: POWER -> # POWER|{...}
+✅ beehive <~~0o0 Kompress v2 frames from LIVE ESP-NOW triad presence (not demo data). Serial: BEEHIVE -> # BEEHIVE|<~~0o0|v2|...
+   Verified with beehive's own decodeKompressSuperUltra: valid, integrityVerified (CRC32 + b3 ternary hash). Not authenticated.
+✅ WUPZ seal command (same 32-byte frame as kernel8), verified against host wupz-core via GET /api/wupz
+```
