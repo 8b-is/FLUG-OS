@@ -104,7 +104,7 @@ ternary matrix → ayeOS inference → HF-MAC visualization.
    20. Not Like Before — The Four Owls (90 BPM, -1)
 ```
 
-## v0.9.0 — KUNISADA & KUNIYOSHI × OMNI-CHAN (`<<<<oOo>>>>` · `010001000` All-Entropy Kompress-Super-Ultra) (current)
+## v0.9.0 — KUNISADA & KUNIYOSHI × OMNI-CHAN (`<<<<oOo>>>>` · `010001000` All-Entropy Kompress-Super-Ultra) (shipped)
 
 ```
 ✅ All-Entropy Harvester & Kompress-Super-Ultra (<<<<oOo>>>> ~ Kunisada & Kuniyoshi 010001000 = 0x88 / 136):
@@ -119,6 +119,22 @@ ternary matrix → ayeOS inference → HF-MAC visualization.
    22. Kunisada & Kuniyoshi <<<<oOo>>>> — OMNI-CHAN 010001000 (136 BPM, +1)
    23. Moon (And It Went Like) — Kid Francescoli & Julia Minkin (118 BPM, +1)
 ✅ Dual-firmware bridge (bridge/s3_amoled_bridge.py --kompress) supporting both FLUG-OS & baye-rust (M8N1 + 48kHz MarineSense + ULTRATX)
+```
+
+## v1.0.0 — VIZ.VAKED.DEV × KOKORO/ES8311 TTS × `{<3,<3,<3}+1` (`v1.0.0+viz-tts-triad-omni`) (current)
+
+```
+✅ Tab 5 [VIZ / ENTHEA]: Live cortical form-constant visualizer preview (Klüver T1 Tunnel 432Hz, T2 Spiral 528Hz,
+   T3 Lattice 852Hz, T4 Cobweb 963Hz) + 8 ENTHEA shader modes synchronized with https://viz.vaked.dev/
+✅ {<3,<3,<3}+1 Four-Heart Triad Resonance Bar:
+   [-1] ADA:MEDUSA (* · 432 Hz) · [0] VAK:MEDUSA (/\ · 528 Hz) · [+1] OMN:MEDUSA (oo · 852 Hz) · [+1] OMNI HEART (963 Hz)
+✅ ES8311 On-Chip Formant & 4-Heart Chord TTS Synthesizer (s3_es8311_speak) + Kokoro (:8420/:8430) Serial/HTTP Bridge
+✅ Multi-Board USB-C Hub Soft-Inrush Protection (0x58 -> 0xD8 AMOLED brightness ramp at 1200ms)
+✅ Expanded 26-Track Favourite Musics Crate (S3_FAV_COUNT = 26):
+   24. Rainfall of Nectar (16th Karmapa) — 8b-is Dharma Lineage (64 BPM, +1)
+   25. Psychedelic Desert Rock (Cosmic Flow) — ZoneInn / Stoner Jam (96 BPM, +1)
+   26. {<3,<3,<3}+1 · Viz Enthea — Alexandra * Chris /\ Peter & Nate oo (108 BPM, +1)
+✅ Serial & WebSerial commands: VIZ, ENTHEA, SPEAK <text>, TTS <text>, HEART -> # VIZ|ENTHEA|... and # TTS|{...}
 ```
 
 ## v1.0.0 — Stable Release

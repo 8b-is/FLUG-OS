@@ -25,6 +25,7 @@
 #include <Wire.h>
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
+#include "driver/i2s.h"
 #include "esp_heap_caps.h"
 
 // ============================================================
@@ -209,6 +210,123 @@ static bool s3_es8311_init() {
     digitalWrite(PIN_SPEAKER_EN, HIGH);
     g_es8311_ok = true;
     return true;
+}
+
+// ============================================================
+// ES8311 On-Device Formant + {<3,<3,<3}+1 Harmonic Voice TTS
+// Safe across both 1.8" (I2S MCLK=16,BCLK=9,WS=45,DOUT=8) and 2.06"
+// ============================================================
+static bool     g_i2s_tts_ready = false;
+static uint32_t g_tts_utterances = 0;
+static char     g_tts_last_text[64] = "{<3,<3,<3}+1 MEDUSA TRIAD ONLINE";
+
+static void s3_es8311_init_i2s_18() {
+    if (!g_board_is_18 || g_i2s_tts_ready) return;
+    i2s_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.mode                 = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX);
+    cfg.sample_rate          = 16000;
+    cfg.bits_per_sample      = I2S_BITS_PER_SAMPLE_16BIT;
+    cfg.channel_format       = I2S_CHANNEL_FMT_RIGHT_LEFT;
+    cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
+    cfg.intr_alloc_flags     = ESP_INTR_FLAG_LEVEL1;
+    cfg.dma_buf_count        = 4;
+    cfg.dma_buf_len          = 256;
+    cfg.use_apll             = false;
+    cfg.tx_desc_auto_clear   = true;
+
+    if (i2s_driver_install(I2S_NUM_0, &cfg, 0, NULL) == ESP_OK) {
+        i2s_pin_config_t pins;
+        memset(&pins, 0, sizeof(pins));
+        pins.mck_io_num   = 16;
+        pins.bck_io_num   = 9;
+        pins.ws_io_num    = 45;
+        pins.data_out_num = 8;
+        pins.data_in_num  = I2S_PIN_NO_CHANGE;
+        if (i2s_set_pin(I2S_NUM_0, &pins) == ESP_OK) {
+            g_i2s_tts_ready = true;
+        }
+    }
+}
+
+static void s3_es8311_speak(const char* text, uint16_t carrier_hz, int8_t trit) {
+    if (!text || !text[0]) return;
+    strncpy(g_tts_last_text, text, sizeof(g_tts_last_text) - 1);
+    g_tts_last_text[sizeof(g_tts_last_text) - 1] = '\0';
+    g_tts_utterances++;
+
+    if (!g_es8311_ok) return;
+    digitalWrite(PIN_SPEAKER_EN, HIGH);
+
+    if (g_board_is_18) {
+        s3_es8311_init_i2s_18();
+        if (g_i2s_tts_ready) {
+            int16_t stereo_buf[256]; // 128 stereo frames (8ms @ 16kHz)
+            float phase0 = 0.0f, phase1 = 0.0f, phase2 = 0.0f;
+            // Pre-chime: {<3,<3,<3}+1 triad chord (432 / 528 / 852 / 963 Hz)
+            const float chord[4] = {432.0f, 528.0f, 852.0f, 963.0f};
+            for (int n = 0; n < 4; n++) {
+                float f = chord[n];
+                for (int blk = 0; blk < 5; blk++) {
+                    for (int i = 0; i < 128; i++) {
+                        phase0 += (6.2831853f * f) / 16000.0f;
+                        if (phase0 > 6.2831853f) phase0 -= 6.2831853f;
+                        int16_t s = (int16_t)(sinf(phase0) * 5200.0f);
+                        stereo_buf[i * 2]     = s;
+                        stereo_buf[i * 2 + 1] = s;
+                    }
+                    size_t written = 0;
+                    i2s_write(I2S_NUM_0, stereo_buf, sizeof(stereo_buf), &written, 20);
+                }
+            }
+            // Formant synthesis over up to 48 characters
+            float f0 = (float)((carrier_hz >= 200 && carrier_hz <= 1200) ? carrier_hz : 432) * 0.35f;
+            if (trit > 0) f0 *= 1.12f;
+            else if (trit < 0) f0 *= 0.92f;
+            size_t len = strlen(text);
+            if (len > 48) len = 48;
+            for (size_t idx = 0; idx < len; idx++) {
+                char c = text[idx];
+                if (c >= 'A' && c <= 'Z') c = (char)(c + 32);
+                float f1 = 500.0f, f2 = 1500.0f, amp = 4800.0f;
+                if (c == 'a')      { f1 = 730.0f; f2 = 1090.0f; }
+                else if (c == 'e') { f1 = 530.0f; f2 = 1840.0f; }
+                else if (c == 'i') { f1 = 270.0f; f2 = 2290.0f; }
+                else if (c == 'o') { f1 = 570.0f; f2 = 840.0f;  }
+                else if (c == 'u') { f1 = 300.0f; f2 = 870.0f;  }
+                else if (c == ' ' || c == '.' || c == ',') { amp = 0.0f; }
+                else {
+                    f1 = 420.0f + (float)((uint8_t)c & 0x0F) * 24.0f;
+                    f2 = 1320.0f + (float)(((uint8_t)c >> 2) & 0x0F) * 45.0f;
+                    amp = 3200.0f;
+                }
+                for (int blk = 0; blk < 3; blk++) {
+                    for (int i = 0; i < 128; i++) {
+                        phase0 += (6.2831853f * f0) / 16000.0f;
+                        phase1 += (6.2831853f * f1) / 16000.0f;
+                        phase2 += (6.2831853f * f2) / 16000.0f;
+                        if (phase0 > 6.2831853f) phase0 -= 6.2831853f;
+                        if (phase1 > 6.2831853f) phase1 -= 6.2831853f;
+                        if (phase2 > 6.2831853f) phase2 -= 6.2831853f;
+                        float v = 0.45f * sinf(phase0) + 0.35f * sinf(phase1) + 0.20f * sinf(phase2);
+                        int16_t s = (int16_t)(v * amp);
+                        stereo_buf[i * 2]     = s;
+                        stereo_buf[i * 2 + 1] = s;
+                    }
+                    size_t written = 0;
+                    i2s_write(I2S_NUM_0, stereo_buf, sizeof(stereo_buf), &written, 20);
+                }
+            }
+        }
+    } else {
+        // On 2.06" boards (GPIO 8/9 used by LCD_RST/TP_RST), pulse ES8311 DAC gain envelope
+        for (int k = 0; k < 4; k++) {
+            s3_i2c_write8(I2C_ADDR_ES8311, 0x32, 0xE2);
+            delay(8);
+            s3_i2c_write8(I2C_ADDR_ES8311, 0x32, 0xD9);
+            delay(6);
+        }
+    }
 }
 
 // ============================================================
@@ -585,7 +703,7 @@ static bool s3_amoled_init() {
         sh8601_write_cmd_data(0x3A, 0x05); // PIXFMT = RGB565
         sh8601_write_cmd(0x29); // DISPON
         sh8601_write_cmd_data(0x53, 0x28); // CTRL_DISPLAY
-        sh8601_write_cmd_data(0x51, 0xF0); // BRIGHTNESS (94%)
+        sh8601_write_cmd_data(0x51, 0x58); // Soft-start brightness (34%) for USB-C hub enumeration safety
         sh8601_write_cmd_data(0x58, 0x00); // CE off
         delay(15);
     } else {
@@ -604,7 +722,7 @@ static bool s3_amoled_init() {
         delay(10);
         sh8601_write_cmd(0x29);
         delay(20);
-        sh8601_write_cmd_data(0x51, 0xFF);
+        sh8601_write_cmd_data(0x51, 0x58); // Soft-start brightness (34%) for USB-C hub enumeration safety
     }
 
     return (s_band_buf != NULL);

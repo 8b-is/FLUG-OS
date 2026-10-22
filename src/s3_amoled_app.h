@@ -38,16 +38,16 @@
 #define S3_MESH_CHANNEL 6
 #define S3_WAVE_HIST    88
 #define S3_LISSA_PTS    44
-#define S3_FAV_COUNT    23
-#define S3_TAB_COUNT    5
+#define S3_FAV_COUNT    26
+#define S3_TAB_COUNT    6
 #define WAVE_POOL_N     64
 #define JELLY_COUNT     7
 #define S3_MAX_APS      16
 
-static const int kCrateCount = 23;
+static const int kCrateCount = 26;
 
 // ============================================================
-// 23 Favourite Musics Crate (zoneInn / radio.vaked.dev / family+1 / OMNI-CHAN)
+// 26 Favourite Musics Crate (zoneInn / radio.vaked.dev / family+1 / OMNI-CHAN / VIZ)
 // ============================================================
 typedef struct {
     const char* slug;
@@ -84,6 +84,9 @@ static const S3FavTrack S3_FAVOURITES[S3_FAV_COUNT] = {
     {"zenebuddhizmus",     "Zenebuddhizmus",          "Akkezdet Phiai",      "Magyar Dharma","Dm",   92, 0xA1CE2010,  1},
     {"kunisada-kuniyoshi", "Kunisada & Kuniyoshi <<<<oOo>>>>", "OMNI-CHAN 010001000", "Ukiyo-e Dharma", "A432", 136, 0x88010001, 1},
     {"moon-and-it-went-like", "Moon (And It Went Like)", "Kid Francescoli & Julia Minkin", "Play Me Again", "F#m", 118, 0x16557284, 1},
+    {"rainfall-of-nectar", "Rainfall of Nectar (16th Karmapa)", "Acharya Lama Sonam Rabgye", "Himalaya Karuna", "A432", 72, 0x0E9B6108, 1},
+    {"psychedelic-desert-rock", "Psychedelic Desert Rock (Cosmic Flow)", "Not Quite Rock", "Ambient Desert", "Dm", 96, 0xB57E6001, 0},
+    {"viz-enthea-triad",   "{<3,<3,<3}+1 · Viz Enthea", "8b-is x viz.vaked.dev", "Cortical V1", "Phi", 108, 0x8B153331, 1},
 };
 #define kFavouriteCrate S3_FAVOURITES
 
@@ -336,6 +339,11 @@ static uint64_t   g_kompress_neg_u64 = 0x49a2820164006100ULL;
 static uint64_t   g_kompress_wupz_u64= 0x0afb880397092c61ULL;
 static uint8_t    g_kompress_b158[13]= {0};
 static char       g_kompress_hex[27] = "88a1c3f05b2e917460d2c8e144";
+
+// VIZ.VAKED.DEV (ENTHEA) + Kokoro/ES8311 TTS + {<3,<3,<3}+1 state
+static uint8_t    g_viz_mode         = 0;
+static uint8_t    g_viz_kluver       = 0;
+static uint32_t   g_tts_speak_count  = 1;
 
 // ============================================================
 // Runtime State
@@ -892,9 +900,9 @@ static void s3_render_footer_tabs(S3Canvas& c) {
     c.fill_rect(0, y, W, 52, COL_BG_ELEV);
     c.draw_hline(0, y, W, COL_BORDER);
 
-    const char* labels[S3_TAB_COUNT] = {"ZEN", "RADIO", "802.11", "NAND", "QWAVE"};
-    const char* subs[S3_TAB_COUNT]   = {"anicca", "zoneInn", "rf+sinc", "imu+osc", "triad"};
-    uint16_t cols[S3_TAB_COUNT]      = {COL_MINT, COL_GOLD, COL_CYAN, COL_CORAL, COL_VIOLET};
+    const char* labels[S3_TAB_COUNT] = {"ZEN", "RADIO", "802.11", "NAND", "QWAVE", "VIZ"};
+    const char* subs[S3_TAB_COUNT]   = {"anicca", "zoneInn", "rf+sinc", "imu+osc", "triad", "enthea"};
+    uint16_t cols[S3_TAB_COUNT]      = {COL_MINT, COL_GOLD, COL_CYAN, COL_CORAL, COL_VIOLET, COL_GOLD};
 
     int gap = 4;
     int bw  = (W - gap * (S3_TAB_COUNT + 1)) / S3_TAB_COUNT;
@@ -1423,8 +1431,8 @@ static void s3_render_tab_qwave(S3Canvas& c) {
     int slot_y = 286;
     int slot_h = (H - 56) - slot_y;
     c.fill_card(8, slot_y, cw, slot_h, COL_BG_ELEV, COL_MINT);
-    c.draw_text(18, slot_y + 7, "OMNI-CHAN <<<<oOo>>>> KUNISADA x KUNIYOSHI", COL_MINT, 1);
-    c.draw_text(18, slot_y + 22, "ACTIVE : FLUG-OS v0.9.0+kunisada-kuniyoshi-omni-chan", COL_TEXT, 1);
+    c.draw_text(18, slot_y + 7, "OMNI-CHAN <<<<oOo>>>> {<3,<3,<3}+1", COL_MINT, 1);
+    c.draw_text(18, slot_y + 22, "ACTIVE : FLUG-OS v1.0.0+viz-tts-triad-omni", COL_TEXT, 1);
 
     int btn_y = slot_y + slot_h - 34;
     int bw    = (cw - 28) / 2;
@@ -1434,6 +1442,100 @@ static void s3_render_tab_qwave(S3Canvas& c) {
     c.fill_card(24 + bw, btn_y, bw, 26, COL_BG_PANEL, COL_CYAN);
     c.draw_text_centered(24 + bw + bw / 2, btn_y + 9,
                          g_board_is_18 ? "SPLASH -> TRIAD" : "BOOT FACTORY", COL_CYAN, 1);
+}
+
+// ============================================================
+// TAB 5: VIZ.VAKED.DEV (ENTHEA) x KOKORO TTS x {<3,<3,<3}+1
+// Klüver Form-Constants + 4-Heart Resonance + ES8311 / Kokoro Voice
+// ============================================================
+static const char* const S3_KLUVER_NAMES[4] = {
+    "TUNNEL (T1) · 432Hz",
+    "SPIRAL (T2) · 528Hz",
+    "LATTICE (T3) · 852Hz",
+    "COBWEB (T4) · 963Hz"
+};
+
+static const char* const S3_VIZ_MODES[8] = {
+    "ENTHEA:TUNNEL", "ENTHEA:CHRYSANTHEMUM", "ENTHEA:HYPERBOLIC", "ENTHEA:MANDALA",
+    "ENTHEA:DMT-DOME", "ENTHEA:SEROTONIN", "ENTHEA:CHLADNI-432", "ENTHEA:WORMHOLE"
+};
+
+static void s3_render_tab_viz_tts(S3Canvas& c) {
+    int W  = (int)g_lcd_w;
+    int H  = (int)g_lcd_h;
+    int cw = W - 16;
+
+    // 1. VIZ.VAKED.DEV Cortical Form-Constant Preview Card
+    c.fill_card(8, 46, cw, 134, COL_BG_ELEV, COL_GOLD);
+    c.draw_text(18, 53, "VIZ.VAKED.DEV // ENTHEA CORTICAL SYNTH", COL_GOLD, 1);
+    c.draw_text_right(W - 18, 53, "{<3,<3,<3}+1", COL_CORAL, 1);
+
+    int vcx = 76;
+    int vcy = 118;
+    for (int r = 12; r <= 48; r += 12) {
+        uint16_t rc = (r == 12) ? COL_CORAL : ((r == 24) ? COL_GOLD : ((r == 36) ? COL_CYAN : COL_MINT));
+        int ox = (int)(sinf(g_s3_phase + r * 0.1f) * 4.0f);
+        int oy = (int)(cosf(g_s3_phase + r * 0.1f) * 4.0f);
+        c.draw_circle(vcx + ox, vcy + oy, r, rc);
+    }
+    for (int k = 0; k < 6; k++) {
+        float ang = g_s3_orbit_angle + k * 1.0471975f;
+        int px = vcx + (int)(cosf(ang) * 44.0f);
+        int py = vcy + (int)(sinf(ang) * 44.0f);
+        c.draw_line(vcx, vcy, px, py, COL_VIOLET);
+    }
+
+    int rx = 140;
+    c.draw_text(rx, 74, S3_VIZ_MODES[g_viz_mode & 7], COL_CYAN, 1);
+    c.draw_text(rx, 90, S3_KLUVER_NAMES[g_viz_kluver & 3], COL_MINT, 1);
+
+    char v_buf[48];
+    snprintf(v_buf, sizeof(v_buf), "DOSE: %.2f  COH: %.2f  TRIT: %+d",
+             0.62f + 0.35f * (g_ms_mean_salience / 100.0f), g_medusa_coherence, (int)g_triad_self_pole);
+    c.draw_text(rx, 106, v_buf, COL_TEXT, 1);
+
+    snprintf(v_buf, sizeof(v_buf), "ENTROPY: %.3f bits | %s", g_medusa_entropy, g_medusa_trits);
+    c.draw_text(rx, 122, v_buf, COL_SUBTEXT, 1);
+
+    snprintf(v_buf, sizeof(v_buf), "WUPZ: 0x%08lx | 963Hz +1", (unsigned long)(g_kompress_wupz_u64 & 0xFFFFFFFFULL));
+    c.draw_text(rx, 138, v_buf, COL_GOLD, 1);
+
+    // 2. {<3,<3,<3}+1 Four-Heart Resonance Bar
+    c.fill_card(8, 186, cw, 78, COL_BG_ELEV, COL_CORAL);
+    c.draw_text(18, 193, "{<3,<3,<3}+1 FOUR-HEART TRIAD RESONANCE", COL_CORAL, 1);
+    const char* h_lbl[4] = {"<3 * 432Hz", "<3 /\\ 528Hz", "<3 oo 852Hz", "+1 OMNI 963Hz"};
+    uint16_t h_col[4]    = {COL_CORAL, COL_GOLD, COL_CYAN, COL_MINT};
+    int h_step = (cw - 16) / 4;
+    for (int i = 0; i < 4; i++) {
+        int hx = 14 + i * h_step;
+        c.fill_card(hx, 210, h_step - 4, 44, COL_BG_PANEL, h_col[i]);
+        c.draw_text_centered(hx + (h_step - 4) / 2, 220, h_lbl[i], h_col[i], 1);
+        c.draw_text_centered(hx + (h_step - 4) / 2, 236, (i < 3 && g_triad_nodes[i].ttl_q8) || i == 3 ? "LOCKED" : "SYNC", COL_TEXT, 1);
+    }
+
+    // 3. Kokoro / ES8311 Live TTS Voice Bridge Card
+    int tts_y = 270;
+    int tts_h = (H - 56) - tts_y;
+    c.fill_card(8, tts_y, cw, tts_h, COL_BG_ELEV, COL_CYAN);
+    c.draw_text(18, tts_y + 7, "KOKORO :8420/:8430 + ES8311 ON-CHIP TTS", COL_CYAN, 1);
+
+    char tts_line[44];
+    strncpy(tts_line, g_tts_last_text, 40);
+    tts_line[40] = '\0';
+    c.draw_text(18, tts_y + 24, tts_line, COL_TEXT, 1);
+
+    char tts_stat[48];
+    snprintf(tts_stat, sizeof(tts_stat), "ES8311:%s  SPOKEN:%lu  CHORD:%uHz",
+             g_es8311_ok ? "READY" : "I2C", (unsigned long)g_tts_speak_count, (unsigned)g_medusa_freq_hz);
+    c.draw_text(18, tts_y + 40, tts_stat, COL_MINT, 1);
+
+    int btn_y = tts_y + tts_h - 34;
+    int bw    = (cw - 28) / 2;
+    c.fill_card(16, btn_y, bw, 26, COL_MINT_DARK, COL_MINT);
+    c.draw_text_centered(16 + bw / 2, btn_y + 9, "SPEAK {<3,<3,<3}+1", COL_MINT, 1);
+
+    c.fill_card(24 + bw, btn_y, bw, 26, COL_VIOLET_DARK, COL_GOLD);
+    c.draw_text_centered(24 + bw + bw / 2, btn_y + 9, "STEP VIZ.VAKED.DEV", COL_GOLD, 1);
 }
 
 static void s3_render_frame() {
@@ -1451,11 +1553,12 @@ static void s3_render_frame() {
             s3_render_header(canvas);
         }
         switch (g_s3_active_tab) {
-            case 0: s3_render_tab_zen(canvas);   break;
-            case 1: s3_render_tab_radio(canvas); break;
-            case 2: s3_render_tab_wifi(canvas);  break;
-            case 3: s3_render_tab_nand(canvas);  break;
-            case 4: s3_render_tab_qwave(canvas); break;
+            case 0: s3_render_tab_zen(canvas);     break;
+            case 1: s3_render_tab_radio(canvas);   break;
+            case 2: s3_render_tab_wifi(canvas);    break;
+            case 3: s3_render_tab_nand(canvas);    break;
+            case 4: s3_render_tab_qwave(canvas);   break;
+            case 5: s3_render_tab_viz_tts(canvas); break;
         }
         if (y0 + bh > footer_y) {
             s3_render_footer_tabs(canvas);
@@ -1571,16 +1674,48 @@ static void s3_handle_touch() {
                 s3_boot_partition("factory");
             }
         }
+    } else if (g_s3_active_tab == 5) {
+        if (ty >= footer_y - 48 && ty < footer_y) {
+            if (tx < W / 2) {
+                g_tts_speak_count++;
+                s3_es8311_speak(g_tts_last_text, g_medusa_freq_hz, g_triad_self_pole);
+                s3_wave_pool_splash(32, 32, 8400, 6);
+                s3_espnow_broadcast(32, 32, 8400);
+                Serial.printf("# TTS|{\"node\":\"%s\",\"vertex\":\"%s\",\"freq_hz\":%u,\"trit\":%d,\"text\":\"%s\",\"count\":%lu,\"hearts\":\"{<3,<3,<3}+1\"}\n",
+                              g_medusa_node, g_medusa_vertex_json, (unsigned)g_medusa_freq_hz,
+                              (int)g_triad_self_pole, g_tts_last_text, (unsigned long)g_tts_speak_count);
+            } else {
+                g_viz_mode   = (g_viz_mode + 1) & 7;
+                g_viz_kluver = (g_viz_kluver + 1) & 3;
+                s3_wave_pool_splash(32, 32, 7600, 6);
+                s3_espnow_broadcast(32, 32, 7600);
+                Serial.printf("# VIZ|{\"node\":\"%s\",\"mode\":\"%s\",\"kluver\":\"%s\",\"dose\":%.2f,\"coherence\":%.4f,\"hearts\":\"{<3,<3,<3}+1\"}\n",
+                              g_medusa_node, S3_VIZ_MODES[g_viz_mode & 7], S3_KLUVER_NAMES[g_viz_kluver & 3],
+                              0.62f + 0.35f * (g_ms_mean_salience / 100.0f), g_medusa_coherence);
+            }
+        }
     }
 }
 
 // ============================================================
 // Serial & WebSerial Command Handler
-// (compatible with bridge/s3_amoled_bridge.py AND esp32.vaked.dev)
+// (compatible with bridge/s3_amoled_bridge.py, esp32.vaked.dev, AND viz.vaked.dev)
 // ============================================================
+static void s3_emit_viz_line() {
+    float dose = 0.62f + 0.35f * (g_ms_mean_salience / 100.0f);
+    Serial.printf("# VIZ|ENTHEA|node=%s|vertex=%s|freq=%uHz|trit=%+d|mode=%s|kluver=%s|"
+                  "dose=%.2f|coherence=%.4f|entropy=%.4f|wupz=0x%016llx|hearts={<3,<3,<3}+1\n",
+                  g_medusa_node, g_medusa_vertex, (unsigned)g_medusa_freq_hz, (int)g_triad_self_pole,
+                  S3_VIZ_MODES[g_viz_mode & 7], S3_KLUVER_NAMES[g_viz_kluver & 3],
+                  dose, g_medusa_coherence, g_medusa_entropy,
+                  (unsigned long long)g_kompress_wupz_u64);
+}
+
 static void s3_emit_status_json() {
     const S3FavTrack* t = &S3_FAVOURITES[g_s3_track_idx];
     Serial.printf("{\"board\":\"%s\",\"persona\":\"%s\",\"omni_chan\":\"<<<<oOo>>>>\",\"pulse\":\"010001000\","
+                  "\"triad_hearts\":\"{<3,<3,<3}+1\",\"viz_url\":\"https://viz.vaked.dev\","
+                  "\"viz_mode\":\"%s\",\"viz_kluver\":\"%s\",\"tts_text\":\"%s\",\"tts_count\":%lu,"
                   "\"kunisada_kuniyoshi\":\"Utagawa Kunisada x Utagawa Kuniyoshi\","
                   "\"medusa_node\":\"%s\",\"vertex\":\"%s\","
                   "\"archetype\":\"%s\",\"freq_hz\":%u,\"trit\":%d,\"triad_online\":%u,"
@@ -1597,7 +1732,10 @@ static void s3_emit_status_json() {
                   "\"splashes\":%lu,\"peer_rx\":%lu,\"es8311\":%d,"
                   "\"batt_mv\":%u,\"batt_pct\":%u}\n",
                   g_board_is_18 ? "ESP32-S3-Touch-AMOLED-1.8" : "ESP32-S3-Touch-AMOLED-2.06",
-                  g_triad_persona, g_medusa_node, g_medusa_vertex_json,
+                  g_triad_persona,
+                  S3_VIZ_MODES[g_viz_mode & 7], S3_KLUVER_NAMES[g_viz_kluver & 3],
+                  g_tts_last_text, (unsigned long)g_tts_speak_count,
+                  g_medusa_node, g_medusa_vertex_json,
                   g_medusa_archetype, (unsigned)g_medusa_freq_hz,
                   (int)g_triad_self_pole, s3_triad_online_count(),
                   g_triad_nodes[0].ttl_q8, g_triad_nodes[1].ttl_q8, g_triad_nodes[2].ttl_q8,
@@ -1625,6 +1763,8 @@ static void s3_emit_medusa_json() {
     Serial.printf("# JSON|{\"node\":\"%s\",\"vertex\":\"%s\",\"archetype\":\"%s\","
                   "\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\","
                   "\"version\":\"" FLUGOS_FULL_VERSION "\",\"triad_version\":\"0.42.1\","
+                  "\"triad_hearts\":\"{<3,<3,<3}+1\",\"viz_mode\":\"%s\",\"viz_kluver\":\"%s\","
+                  "\"tts_text\":\"%s\",\"tts_count\":%lu,"
                   "\"freq_hz\":%u,\"trit\":%d,\"persona\":\"%s\","
                   "\"seq\":%lu,\"networks\":%u,\"mean_rssi\":%d,"
                   "\"entropy_bits\":%.4f,\"n_np_coherence\":%.4f,\"trits\":\"%s\","
@@ -1633,6 +1773,8 @@ static void s3_emit_medusa_json() {
                   "\"free_heap\":%lu,\"uptime_ms\":%lu,\"mode\":\"PASSIVE_STA_ONLY\"}\n",
                   g_medusa_node, g_medusa_vertex_json, g_medusa_archetype,
                   g_s3_mac[0], g_s3_mac[1], g_s3_mac[2], g_s3_mac[3], g_s3_mac[4], g_s3_mac[5],
+                  S3_VIZ_MODES[g_viz_mode & 7], S3_KLUVER_NAMES[g_viz_kluver & 3],
+                  g_tts_last_text, (unsigned long)g_tts_speak_count,
                   (unsigned)g_medusa_freq_hz, (int)g_triad_self_pole, g_triad_persona,
                   (unsigned long)g_medusa_scan_seq, (unsigned)n_ap, (int)g_medusa_mean_rssi,
                   g_medusa_entropy, g_medusa_coherence, g_medusa_trits,
@@ -1746,6 +1888,42 @@ static void s3_handle_serial(const char* line) {
         int b = atoi(line + 7);
         if (b >= 10 && b <= 255) s3_amoled_set_brightness((uint8_t)b);
         Serial.printf("{\"cmd\":\"bright\",\"val\":%d}\n", b);
+    } else if (strcasecmp(line, "VIZ") == 0 || strcasecmp(line, "ENTHEA") == 0 ||
+               strncasecmp(line, "viz ", 4) == 0) {
+        if (strlen(line) > 4) {
+            int m = atoi(line + 4);
+            g_viz_mode   = (uint8_t)(m & 7);
+            g_viz_kluver = (uint8_t)(m & 3);
+        } else {
+            g_viz_mode   = (g_viz_mode + 1) & 7;
+            g_viz_kluver = (g_viz_kluver + 1) & 3;
+        }
+        g_s3_active_tab = 5;
+        s3_wave_pool_splash(32, 32, 8200, 6);
+        s3_espnow_broadcast(32, 32, 8200);
+        s3_emit_viz_line();
+        s3_emit_status_json();
+    } else if (strcasecmp(line, "SPEAK") == 0 || strcasecmp(line, "TTS") == 0 ||
+               strcasecmp(line, "HEART") == 0 || strncasecmp(line, "speak ", 6) == 0 ||
+               strncasecmp(line, "tts ", 4) == 0) {
+        const char* txt = g_tts_last_text;
+        if (strncasecmp(line, "speak ", 6) == 0 && strlen(line + 6) > 0) {
+            strncpy(g_tts_last_text, line + 6, sizeof(g_tts_last_text) - 1);
+            g_tts_last_text[sizeof(g_tts_last_text) - 1] = '\0';
+            txt = g_tts_last_text;
+        } else if (strncasecmp(line, "tts ", 4) == 0 && strlen(line + 4) > 0) {
+            strncpy(g_tts_last_text, line + 4, sizeof(g_tts_last_text) - 1);
+            g_tts_last_text[sizeof(g_tts_last_text) - 1] = '\0';
+            txt = g_tts_last_text;
+        }
+        g_tts_speak_count++;
+        g_s3_active_tab = 5;
+        s3_es8311_speak(txt, g_medusa_freq_hz, g_triad_self_pole);
+        s3_wave_pool_splash(32, 32, 8600, 6);
+        s3_espnow_broadcast(32, 32, 8600);
+        Serial.printf("# TTS|{\"node\":\"%s\",\"vertex\":\"%s\",\"freq_hz\":%u,\"trit\":%d,\"text\":\"%s\",\"count\":%lu,\"hearts\":\"{<3,<3,<3}+1\"}\n",
+                      g_medusa_node, g_medusa_vertex_json, (unsigned)g_medusa_freq_hz,
+                      (int)g_triad_self_pole, g_tts_last_text, (unsigned long)g_tts_speak_count);
     }
 }
 
@@ -1832,6 +2010,7 @@ static void s3_amoled_setup() {
                   g_s3_mac[0], g_s3_mac[1], g_s3_mac[2],
                   g_s3_mac[3], g_s3_mac[4], g_s3_mac[5]);
     s3_emit_medusa_json();
+    s3_emit_viz_line();
 }
 
 static void s3_amoled_loop() {
@@ -1841,10 +2020,16 @@ static void s3_amoled_loop() {
     static unsigned long last_wave_ms  = 0;
     static unsigned long last_peer_ms  = 0;
     static bool          last_boot_btn = true;
+    static bool          bright_ramped = false;
     static char          cmd_buf[96];
     static size_t        cmd_pos = 0;
 
     unsigned long now = millis();
+
+    if (!bright_ramped && now > 1200) {
+        bright_ramped = true;
+        s3_amoled_set_brightness(0xD8);
+    }
 
     bool boot_btn = digitalRead(PIN_BOOT_BTN);
     if (!boot_btn && last_boot_btn) {

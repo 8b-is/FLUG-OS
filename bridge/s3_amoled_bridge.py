@@ -111,6 +111,14 @@ def run_on_port(port: str, args) -> None:
             for line in send_command(ser, "KOMPRESS\nULTRATX", wait_sec=2.2):
                 print(f"[{port}] {line}")
 
+        if args.viz:
+            for line in send_command(ser, "VIZ", wait_sec=1.8):
+                print(f"[{port}] {line}")
+
+        if args.speak is not None:
+            for line in send_command(ser, f"SPEAK {args.speak}", wait_sec=2.4):
+                print(f"[{port}] {line}")
+
         if args.status or (
             args.tab is None
             and not args.splash
@@ -118,6 +126,8 @@ def run_on_port(port: str, args) -> None:
             and args.ch is None
             and not args.hop
             and not args.kompress
+            and not args.viz
+            and args.speak is None
             and not args.listen
         ):
             for line in send_command(ser, "status"):
@@ -157,12 +167,14 @@ def main():
     parser.add_argument("--all", action="store_true", help="Run command across all attached ESP32-S3 AMOLED boards (1.8\" & 2.06\")")
     parser.add_argument("--baud", type=int, default=DEFAULT_BAUD, help="Baud rate (default: 115200)")
     parser.add_argument("--status", action="store_true", help="Query live JSON status from ESP32-S3 AMOLED")
-    parser.add_argument("--tab", type=int, choices=[0, 1, 2, 3, 4], help="Switch active AMOLED tab (0=ZEN, 1=RADIO, 2=802.11, 3=NAND, 4=QWAVE)")
+    parser.add_argument("--tab", type=int, choices=[0, 1, 2, 3, 4, 5], help="Switch active AMOLED tab (0=ZEN, 1=RADIO, 2=802.11, 3=NAND, 4=QWAVE, 5=VIZ)")
     parser.add_argument("--splash", action="store_true", help="Inject central 2D Wave Pool splash + ESP-NOW peer broadcast")
-    parser.add_argument("--track", type=int, help="Select Favourite Music track (1..23)")
+    parser.add_argument("--track", type=int, help="Select Favourite Music track (1..26)")
     parser.add_argument("--ch", type=int, help="Lock 802.11 channel (1..13)")
     parser.add_argument("--hop", action="store_true", help="Toggle 802.11 channel hopping")
     parser.add_argument("--kompress", action="store_true", help="Harvest & Kompress-Super-Ultra all entropy (<<<<oOo>>>> ~ Kunisada & Kuniyoshi 010001000)")
+    parser.add_argument("--viz", action="store_true", help="Step viz.vaked.dev ENTHEA cortical form-constant & emit # VIZ| telemetry")
+    parser.add_argument("--speak", type=str, help="Speak text via on-chip ES8311 Formant/Chord TTS ({<3,<3,<3}+1)")
     parser.add_argument("--listen", action="store_true", help="Listen for touchscreen events & wave telemetry")
     parser.add_argument("--bt", help="Optional Bluetooth A2DP sink name for zoneInn playback")
     args = parser.parse_args()
