@@ -133,7 +133,7 @@ static void learn_tick(unsigned long now) {
         }
         learn_set_say(m, worst, worst_z);
     }
-    if (now - g_lrn_last_save > 600000UL) { g_lrn_last_save = now; learn_save(); }
+    if (now - g_lrn_last_save > 60000UL) { g_lrn_last_save = now; learn_save(); }
 }
 
 static void learn_emit_status() {
