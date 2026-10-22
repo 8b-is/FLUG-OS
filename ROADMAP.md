@@ -83,7 +83,7 @@ ternary matrix → ayeOS inference → HF-MAC visualization.
 ✅ Dynamic USB serial discovery (glob /dev/cu.usbmodem*) in bridge/s3_amoled_bridge.py across USB hub re-enumerations
 ```
 
-## v0.8.0 — MEDUSA-OMNI (`wigle-triad` v0.42.1 WebSerial Fusion × 20-Track `family+1` Crate) (current)
+## v0.8.0 — MEDUSA-OMNI (`wigle-triad` v0.42.1 WebSerial Fusion × 20-Track `family+1` Crate) (shipped)
 
 ```
 ✅ Fused wigle-triad (v0.42.1) WebSerial protocol for https://esp32.vaked.dev/:
@@ -102,6 +102,23 @@ ternary matrix → ayeOS inference → HF-MAC visualization.
    18. GLUE — BICEP (130 BPM, 0)
    19. Oblivion — Grimes (156 BPM, +1)
    20. Not Like Before — The Four Owls (90 BPM, -1)
+```
+
+## v0.9.0 — KUNISADA & KUNIYOSHI × OMNI-CHAN (`<<<<oOo>>>>` · `010001000` All-Entropy Kompress-Super-Ultra) (current)
+
+```
+✅ All-Entropy Harvester & Kompress-Super-Ultra (<<<<oOo>>>> ~ Kunisada & Kuniyoshi 010001000 = 0x88 / 136):
+   Fuses esp_random() hardware RNG, 14-ch 802.11 packet/RSSI jitter, QMI8658 6-axis IMU micro-tremor,
+   AXP2101 PMIC ADC batt_mv LSBs, and 64x64 Wave Pool MarineSense jitter into:
+   - 64-trit orthogonal Quantum Bitplanes (quantum_pos_u64, quantum_neg_u64, POPCNT(pos & neg) == 0)
+   - GAIA-MLX-QUANT b1.58 5-trits/byte packed payload (kompress_b158, 20.19x vs FP32)
+   - 64-bit wupz_xor_fold integrity seal (wupz_fold)
+✅ WebSerial & USB commands: KOMPRESS, ENTROPY, OMNI, KUNISADA, KUNIYOSHI -> # KOMPRESS|OMNI-CHAN|<<<<oOo>>>>|...
+✅ Expanded 23-Track Favourite Musics Crate (kCrateCount = 23):
+   21. Zenebuddhizmus — Akkezdet Phiai (92 BPM, +1)
+   22. Kunisada & Kuniyoshi <<<<oOo>>>> — OMNI-CHAN 010001000 (136 BPM, +1)
+   23. Moon (And It Went Like) — Kid Francescoli & Julia Minkin (118 BPM, +1)
+✅ Dual-firmware bridge (bridge/s3_amoled_bridge.py --kompress) supporting both FLUG-OS & baye-rust (M8N1 + 48kHz MarineSense + ULTRATX)
 ```
 
 ## v1.0.0 — Stable Release

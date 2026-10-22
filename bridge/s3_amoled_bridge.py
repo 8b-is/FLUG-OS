@@ -45,12 +45,14 @@ def discover_ports() -> list[str]:
 
 def open_port(port: str, baud: int):
     import serial
-    return serial.Serial(port, baud, timeout=0.4)
+    return serial.Serial(port, baud, timeout=0.4, dsrdtr=False, rtscts=False)
 
 
-def send_command(ser, cmd: str, wait_sec: float = 1.2) -> list[str]:
+def send_command(ser, cmd: str, wait_sec: float = 1.6) -> list[str]:
     ser.reset_input_buffer()
-    ser.write(f"{cmd.strip()}\n".encode("utf-8"))
+    clean = cmd.strip()
+    wire = "STATUS\nstatus\n" if clean.lower() == "status" else f"{clean}\nSTATUS\n"
+    ser.write(wire.encode("utf-8"))
     ser.flush()
     lines: list[str] = []
     deadline = time.time() + wait_sec
@@ -64,6 +66,8 @@ def send_command(ser, cmd: str, wait_sec: float = 1.2) -> list[str]:
             if text.startswith("{") and (
                 '"board"' in text or '"cmd"' in text or '"event"' in text
             ):
+                break
+            if text.startswith("[USB] STATUS") and len(lines) >= 2:
                 break
     return lines
 
@@ -103,12 +107,17 @@ def run_on_port(port: str, args) -> None:
             for line in send_command(ser, "hop"):
                 print(f"[{port}] {line}")
 
+        if args.kompress:
+            for line in send_command(ser, "KOMPRESS\nULTRATX", wait_sec=2.2):
+                print(f"[{port}] {line}")
+
         if args.status or (
             args.tab is None
             and not args.splash
             and args.track is None
             and args.ch is None
             and not args.hop
+            and not args.kompress
             and not args.listen
         ):
             for line in send_command(ser, "status"):
@@ -150,9 +159,10 @@ def main():
     parser.add_argument("--status", action="store_true", help="Query live JSON status from ESP32-S3 AMOLED")
     parser.add_argument("--tab", type=int, choices=[0, 1, 2, 3, 4], help="Switch active AMOLED tab (0=ZEN, 1=RADIO, 2=802.11, 3=NAND, 4=QWAVE)")
     parser.add_argument("--splash", action="store_true", help="Inject central 2D Wave Pool splash + ESP-NOW peer broadcast")
-    parser.add_argument("--track", type=int, help="Select Favourite Music track (1..20)")
+    parser.add_argument("--track", type=int, help="Select Favourite Music track (1..23)")
     parser.add_argument("--ch", type=int, help="Lock 802.11 channel (1..13)")
     parser.add_argument("--hop", action="store_true", help="Toggle 802.11 channel hopping")
+    parser.add_argument("--kompress", action="store_true", help="Harvest & Kompress-Super-Ultra all entropy (<<<<oOo>>>> ~ Kunisada & Kuniyoshi 010001000)")
     parser.add_argument("--listen", action="store_true", help="Listen for touchscreen events & wave telemetry")
     parser.add_argument("--bt", help="Optional Bluetooth A2DP sink name for zoneInn playback")
     args = parser.parse_args()

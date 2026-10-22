@@ -38,16 +38,16 @@
 #define S3_MESH_CHANNEL 6
 #define S3_WAVE_HIST    88
 #define S3_LISSA_PTS    44
-#define S3_FAV_COUNT    21
+#define S3_FAV_COUNT    23
 #define S3_TAB_COUNT    5
 #define WAVE_POOL_N     64
 #define JELLY_COUNT     7
 #define S3_MAX_APS      16
 
-static const int kCrateCount = 21;
+static const int kCrateCount = 23;
 
 // ============================================================
-// 20 Favourite Musics Crate (zoneInn / radio.vaked.dev / family+1)
+// 23 Favourite Musics Crate (zoneInn / radio.vaked.dev / family+1 / OMNI-CHAN)
 // ============================================================
 typedef struct {
     const char* slug;
@@ -82,6 +82,8 @@ static const S3FavTrack S3_FAVOURITES[S3_FAV_COUNT] = {
     {"oblivion",           "Oblivion",                "Grimes",              "Synth-Pop",    "Eb",  156, 0xC3091B7E,  1},
     {"not-like-before",    "Not Like Before",         "The Four Owls",       "UK Boom-Bap",  "F#m",  90, 0x5D17A8E2, -1},
     {"zenebuddhizmus",     "Zenebuddhizmus",          "Akkezdet Phiai",      "Magyar Dharma","Dm",   92, 0xA1CE2010,  1},
+    {"kunisada-kuniyoshi", "Kunisada & Kuniyoshi <<<<oOo>>>>", "OMNI-CHAN 010001000", "Ukiyo-e Dharma", "A432", 136, 0x88010001, 1},
+    {"moon-and-it-went-like", "Moon (And It Went Like)", "Kid Francescoli & Julia Minkin", "Play Me Again", "F#m", 118, 0x16557284, 1},
 };
 #define kFavouriteCrate S3_FAVOURITES
 
@@ -327,6 +329,13 @@ static float      g_medusa_entropy   = 0.0f;
 static float      g_medusa_coherence = 0.0f;
 static int        g_medusa_mean_rssi = -62;
 static char       g_medusa_trits[12] = "+-0+0--+0";
+
+// All-Entropy Kompress-Super-Ultra (<<<<oOo>>>> ~ Kunisada & Kuniyoshi 010001000 -> OMNI-CHAN)
+static uint64_t   g_kompress_pos_u64 = 0x824144bc0a470247ULL;
+static uint64_t   g_kompress_neg_u64 = 0x49a2820164006100ULL;
+static uint64_t   g_kompress_wupz_u64= 0x0afb880397092c61ULL;
+static uint8_t    g_kompress_b158[13]= {0};
+static char       g_kompress_hex[27] = "88a1c3f05b2e917460d2c8e144";
 
 // ============================================================
 // Runtime State
@@ -745,7 +754,56 @@ static void s3_step_physics() {
     }
     g_medusa_trits[9] = '\0';
 
-    // 7. Render TernarySeam radiation matrix
+    // 7. Harvest & Kompress-Super-Ultra All Entropy (<<<<oOo>>>> ~ Kunisada & Kuniyoshi 010001000)
+    {
+        uint64_t pos_plane = 0ULL;
+        uint64_t neg_plane = 0ULL;
+        uint32_t hw_rng    = esp_random();
+        uint32_t imu_seed  = ((uint32_t)((int32_t)(g_imu.ax * 1024.0f) & 0xFFFF) << 16) ^
+                             ((uint32_t)((int32_t)(g_imu.ay * 1024.0f) & 0xFFFF)) ^
+                             ((uint32_t)g_power.batt_mv << 8) ^ (uint32_t)g_ms_mean_jitter;
+        int8_t trits65[65];
+        for (int i = 0; i < 65; i++) {
+            uint32_t mix = hw_rng ^ (imu_seed + (uint32_t)i * 0x9E3779B9UL) ^
+                           ((uint32_t)g_s3_ch_pkts[i % S3_MAX_CHANNEL] << (i & 7)) ^
+                           ((uint32_t)g_wp_u_curr[(i * 7) & 63][(i * 13) & 63] & 0xFFFF) ^
+                           0x88UL; // 010001000 Kunisada & Kuniyoshi pulse
+            uint8_t m3 = (uint8_t)((mix ^ (mix >> 11)) % 3);
+            int8_t tr  = (m3 == 1) ? 1 : ((m3 == 2) ? -1 : 0);
+            trits65[i] = tr;
+            if (i < 64) {
+                if (tr > 0) pos_plane |= (1ULL << i);
+                else if (tr < 0) neg_plane |= (1ULL << i);
+            }
+        }
+        g_kompress_pos_u64 = pos_plane;
+        g_kompress_neg_u64 = neg_plane;
+        uint64_t w0 = (pos_plane ^ 0x9E3779B97F4A7C15ULL);
+        uint64_t w1 = (neg_plane ^ (2ULL * 0x9E3779B97F4A7C15ULL));
+        uint64_t r0 = (w0 << 13) | (w0 >> 51);
+        uint64_t r1 = (w1 << 13) | (w1 >> 51);
+        uint64_t acc = 0xCBF29CE484222325ULL;
+        acc = (acc ^ r0) * 0x100000001B3ULL;
+        acc = (acc ^ r1) * 0x100000001B3ULL;
+        g_kompress_wupz_u64 = acc;
+
+        static const uint8_t pow3[5] = {1, 3, 9, 27, 81};
+        static const char hex_lut[17] = "0123456789abcdef";
+        for (int b = 0; b < 13; b++) {
+            uint8_t acc_b = 0;
+            for (int j = 0; j < 5; j++) {
+                int8_t t = trits65[b * 5 + j];
+                uint8_t u = (t < 0) ? 2 : ((t > 0) ? 1 : 0);
+                acc_b += u * pow3[j];
+            }
+            g_kompress_b158[b] = acc_b;
+            g_kompress_hex[b * 2]     = hex_lut[(acc_b >> 4) & 0x0F];
+            g_kompress_hex[b * 2 + 1] = hex_lut[acc_b & 0x0F];
+        }
+        g_kompress_hex[26] = '\0';
+    }
+
+    // 8. Render TernarySeam radiation matrix
     ternary_seam_render(&g_s3_seam_buf, &g_s3_seam_mat);
     g_s3_witness_seq++;
 }
@@ -1365,8 +1423,8 @@ static void s3_render_tab_qwave(S3Canvas& c) {
     int slot_y = 286;
     int slot_h = (H - 56) - slot_y;
     c.fill_card(8, slot_y, cw, slot_h, COL_BG_ELEV, COL_MINT);
-    c.draw_text(18, slot_y + 7, "MEDUSA-OMNI // MARINESENSE x ANICCA", COL_MINT, 1);
-    c.draw_text(18, slot_y + 22, "ACTIVE : FLUG-OS v0.8.0+medusa-omni", COL_TEXT, 1);
+    c.draw_text(18, slot_y + 7, "OMNI-CHAN <<<<oOo>>>> KUNISADA x KUNIYOSHI", COL_MINT, 1);
+    c.draw_text(18, slot_y + 22, "ACTIVE : FLUG-OS v0.9.0+kunisada-kuniyoshi-omni-chan", COL_TEXT, 1);
 
     int btn_y = slot_y + slot_h - 34;
     int bw    = (cw - 28) / 2;
@@ -1522,7 +1580,9 @@ static void s3_handle_touch() {
 // ============================================================
 static void s3_emit_status_json() {
     const S3FavTrack* t = &S3_FAVOURITES[g_s3_track_idx];
-    Serial.printf("{\"board\":\"%s\",\"persona\":\"%s\",\"medusa_node\":\"%s\",\"vertex\":\"%s\","
+    Serial.printf("{\"board\":\"%s\",\"persona\":\"%s\",\"omni_chan\":\"<<<<oOo>>>>\",\"pulse\":\"010001000\","
+                  "\"kunisada_kuniyoshi\":\"Utagawa Kunisada x Utagawa Kuniyoshi\","
+                  "\"medusa_node\":\"%s\",\"vertex\":\"%s\","
                   "\"archetype\":\"%s\",\"freq_hz\":%u,\"trit\":%d,\"triad_online\":%u,"
                   "\"anicca_ttl\":[%u,%u,%u],"
                   "\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\",\"lcd\":\"%ux%u\","
@@ -1532,6 +1592,8 @@ static void s3_emit_status_json() {
                   "\"track_idx\":%d,\"track\":\"%s\",\"artist\":\"%s\",\"bpm\":%u,\"crate_count\":%d,"
                   "\"qt\":\"%02x\",\"ax\":%.2f,\"ay\":%.2f,\"az\":%.2f,\"sickness\":%.2f,"
                   "\"salience\":%u,\"jitter\":%u,\"viscosity\":%.2f,\"reynolds\":%u,\"recalls\":%lu,"
+                  "\"wupz_fold\":\"0x%016llx\",\"quantum_pos_u64\":\"0x%016llx\",\"quantum_neg_u64\":\"0x%016llx\","
+                  "\"kompress_b158\":\"%s\",\"kompress_ratio\":20.19,"
                   "\"splashes\":%lu,\"peer_rx\":%lu,\"es8311\":%d,"
                   "\"batt_mv\":%u,\"batt_pct\":%u}\n",
                   g_board_is_18 ? "ESP32-S3-Touch-AMOLED-1.8" : "ESP32-S3-Touch-AMOLED-2.06",
@@ -1548,6 +1610,10 @@ static void s3_emit_status_json() {
                   g_imu.qt_byte, g_imu.ax, g_imu.ay, g_imu.az, g_imu.sickness,
                   g_ms_mean_salience, g_ms_mean_jitter, g_ms_viscosity, g_ms_reynolds,
                   (unsigned long)g_ms_ecphoric_recalls,
+                  (unsigned long long)g_kompress_wupz_u64,
+                  (unsigned long long)g_kompress_pos_u64,
+                  (unsigned long long)g_kompress_neg_u64,
+                  g_kompress_hex,
                   (unsigned long)g_wp_splashes, (unsigned long)g_s3_peer_rx_cnt,
                   g_es8311_ok ? 1 : 0,
                   g_power.batt_mv, g_power.batt_pct);
@@ -1627,6 +1693,16 @@ static void s3_handle_serial(const char* line) {
                       g_triad_nodes[1].ttl_q8 ? "MEDUSA" : "POLYP", g_triad_nodes[1].ttl_q8,
                       g_triad_nodes[2].ttl_q8 ? "MEDUSA" : "POLYP", g_triad_nodes[2].ttl_q8,
                       s3_triad_online_count(), S3_FAV_COUNT);
+    } else if (strcasecmp(line, "KOMPRESS") == 0 || strcasecmp(line, "ENTROPY") == 0 ||
+               strcasecmp(line, "OMNI") == 0 || strcasecmp(line, "KUNISADA") == 0 ||
+               strcasecmp(line, "KUNIYOSHI") == 0) {
+        Serial.printf("# KOMPRESS|OMNI-CHAN|<<<<oOo>>>>|KUNISADA_KUNIYOSHI|010001000|"
+                      "wupz=0x%016llx|pos=0x%016llx|neg=0x%016llx|b158=%s|ratio=20.19x\n",
+                      (unsigned long long)g_kompress_wupz_u64,
+                      (unsigned long long)g_kompress_pos_u64,
+                      (unsigned long long)g_kompress_neg_u64,
+                      g_kompress_hex);
+        s3_emit_status_json();
     } else if (strncasecmp(line, "tab ", 4) == 0) {
         int tab = atoi(line + 4);
         if (tab >= 0 && tab < S3_TAB_COUNT) g_s3_active_tab = (uint8_t)tab;
