@@ -246,3 +246,11 @@ ternary matrix → ayeOS inference → HF-MAC visualization.
    and published as # LEARN|{...}. Serial: TIME <epoch> <tz>, LEARN [SPEAK 0|1 | RESET | SAVE]
 ✅ Host (wiglewww, Rust) sets the clock, polls LEARN every 6 s and speaks new sentences with Kokoro; GET /api/learn
 ```
+
+## v1.4.0 — hotspot clock (`v1.4.0+learn-speak-wifi`)
+
+```
+✅ Optional STA join for SNTP time every 6 h (src/net_time.h): the board keeps its own hour-of-day clock, so the learner
+   no longer needs the host. Joins briefly, then disconnects and restores the mesh channel + promiscuous capture.
+   Credentials live ONLY in the board's NVS (serial: WIFI <ssid> <password> | WIFI SYNC | WIFI CLEAR | WIFI) — never in git.
+```

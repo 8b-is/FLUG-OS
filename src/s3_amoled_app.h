@@ -1730,6 +1730,7 @@ static void s3_handle_touch() {
 // ============================================================
 #include "phoenix_hive.h"
 #include "learn_env.h"
+#include "net_time.h"
 
 static void s3_emit_viz_line() {
     float dose = 0.62f + 0.35f * (g_ms_mean_salience / 100.0f);
@@ -1927,6 +1928,8 @@ static void s3_handle_serial(const char* line) {
         Serial.printf("# WUPZ|{\"node\":\"%s\",\"ticks\":%lu,\"xor_fold\":\"0x%016llx\",\"popcount\":%lu,\"frame\":\"%s\",\"src\":\"wupz+kernel8\"}\n",
                       g_medusa_node, (unsigned long)ticks,
                       (unsigned long long)s3_wupz_xor_fold(fr, 32), (unsigned long)s3_wupz_popcount(fr, 32), hex);
+    } else if (strncasecmp(line, "wifi", 4) == 0 && (line[4] == 0 || line[4] == 0x20)) {
+        net_command(line + 4);
     } else if (strncasecmp(line, "time ", 5) == 0) {
         learn_set_time(line + 5);
     } else if (strncasecmp(line, "learn", 5) == 0) {
@@ -2070,6 +2073,7 @@ static void s3_amoled_setup() {
                   g_s3_mac[0], g_s3_mac[1], g_s3_mac[2],
                   g_s3_mac[3], g_s3_mac[4], g_s3_mac[5]);
     learn_load();
+    net_load();
     s3_emit_medusa_json();
     s3_emit_viz_line();
 }
@@ -2141,6 +2145,7 @@ static void s3_amoled_loop() {
     }
 
     learn_tick(now);
+    net_tick(now);
 
     // oxi-phoenix: Saving/Critical slow the render loop (frame_ms); otherwise full 25 fps.
     const unsigned long frame_period =

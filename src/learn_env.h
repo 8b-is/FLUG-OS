@@ -17,6 +17,11 @@ struct LrnStat { float mean; float var; uint16_t n; uint16_t pad; };
 
 static LrnStat  g_lrn[LRN_BUCKETS][LRN_FEATS];
 static uint8_t  g_lrn_hour      = 24;      // 24 = clock unknown (host sends TIME)
+static bool     g_lrn_clock_ok  = false;
+static long long g_clk_epoch0   = 0;
+static unsigned long g_clk_ms0  = 0;
+static long     g_clk_tz        = 9 * 3600;   // default JST until the host/NVS says otherwise
+static void learn_update_hour(unsigned long now);
 static bool     g_lrn_speak     = true;
 static char     g_lrn_say[112]  = "";
 static uint32_t g_lrn_say_seq   = 0;
@@ -35,6 +40,7 @@ static void learn_load() {
     if (p.begin("learn", true)) {
         if (p.getBytesLength("ls") == sizeof(g_lrn)) p.getBytes("ls", g_lrn, sizeof(g_lrn));
         g_lrn_speak = p.getBool("spk", true);
+        g_clk_tz = p.getLong("tz", g_clk_tz);
         p.end();
     }
     for (int b = 0; b < LRN_BUCKETS; b++) for (int i = 0; i < LRN_FEATS; i++) g_lrn_total += g_lrn[b][i].n;
@@ -65,6 +71,7 @@ static void learn_set_say(const char* msg, int feat, float z) {
 }
 
 static void learn_tick(unsigned long now) {
+    learn_update_hour(now);
     if (now - g_lrn_last_tick < 5000) return;
     float dt = (now - g_lrn_last_tick) / 1000.0f;
     g_lrn_last_tick = now;
@@ -140,12 +147,31 @@ static void learn_emit_status() {
 }
 
 // TIME <epoch_s> <tz_offset_s>  -> selects the hour-of-day bucket
-static void learn_set_time(const char* args) {
-    long long epoch = atoll(args);
-    const char* sp = strchr(args, ' ');
-    long tz = sp ? atol(sp + 1) : 0;
-    long long local = epoch + tz;
+static void learn_update_hour(unsigned long now) {
+    if (!g_lrn_clock_ok) return;
+    long long local = g_clk_epoch0 + (long long)((now - g_clk_ms0) / 1000UL) + g_clk_tz;
     g_lrn_hour = (uint8_t)(((local / 3600) % 24 + 24) % 24);
+}
+
+static void learn_clock_set(long long epoch) {
+    g_clk_epoch0 = epoch;
+    g_clk_ms0 = millis();
+    g_lrn_clock_ok = true;
+    learn_update_hour(g_clk_ms0);
+}
+
+// TIME <epoch_s> <tz_offset_s>  -> sets the clock + selects the hour-of-day bucket
+static void learn_set_time(const char* args) {
+    const char* sp = strchr(args, ' ');
+    if (sp) {
+        long tz = atol(sp + 1);
+        if (tz != g_clk_tz) {
+            g_clk_tz = tz;
+            Preferences p;
+            if (p.begin("learn", false)) { p.putLong("tz", tz); p.end(); }
+        }
+    }
+    learn_clock_set(atoll(args));
 }
 
 #endif /* FLUGOS_LEARN_ENV_H */
