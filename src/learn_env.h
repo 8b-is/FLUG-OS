@@ -56,6 +56,7 @@ static void learn_save() {
     }
 }
 
+static void net_push_say(const char* say, uint32_t seq);
 static void learn_set_say(const char* msg, int feat, float z) {
     strncpy(g_lrn_say, msg, sizeof(g_lrn_say) - 1);
     g_lrn_say[sizeof(g_lrn_say) - 1] = '\0';
@@ -63,6 +64,7 @@ static void learn_set_say(const char* msg, int feat, float z) {
     Serial.printf("# LEARN|{\"node\":\"%s\",\"seq\":%lu,\"feature\":\"%s\",\"z\":%.2f,\"hour\":%u,\"say\":\"%s\"}\n",
                   g_medusa_node, (unsigned long)g_lrn_say_seq, feat >= 0 ? LRN_NAME[feat] : "milestone",
                   z, (unsigned)g_lrn_hour, g_lrn_say);
+    net_push_say(g_lrn_say, g_lrn_say_seq);   // Mac speaks it (Kokoro) while the board speaks on-chip
     unsigned long now = millis();
     if (g_lrn_speak && (g_lrn_last_speak == 0 || now - g_lrn_last_speak >= 120000UL)) {
         g_lrn_last_speak = now;

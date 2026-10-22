@@ -1928,6 +1928,8 @@ static void s3_handle_serial(const char* line) {
         Serial.printf("# WUPZ|{\"node\":\"%s\",\"ticks\":%lu,\"xor_fold\":\"0x%016llx\",\"popcount\":%lu,\"frame\":\"%s\",\"src\":\"wupz+kernel8\"}\n",
                       g_medusa_node, (unsigned long)ticks,
                       (unsigned long long)s3_wupz_xor_fold(fr, 32), (unsigned long)s3_wupz_popcount(fr, 32), hex);
+    } else if (strncasecmp(line, "host ", 5) == 0) {
+        net_host_set(line + 5);
     } else if (strncasecmp(line, "wifi", 4) == 0 && (line[4] == 0 || line[4] == 0x20)) {
         net_command(line + 4);
     } else if (strncasecmp(line, "time ", 5) == 0) {
@@ -1938,6 +1940,7 @@ static void s3_handle_serial(const char* line) {
         if (strncasecmp(a, "speak ", 6) == 0) { g_lrn_speak = atoi(a + 6) != 0; learn_save(); }
         else if (strcasecmp(a, "reset") == 0) { memset(g_lrn, 0, sizeof(g_lrn)); g_lrn_total = 0; for (int i = 0; i < LRN_BUCKETS; i++) g_lrn_ready_said[i] = false; learn_save(); }
         else if (strcasecmp(a, "save") == 0) { learn_save(); }
+        else if (strncasecmp(a, "say ", 4) == 0) { g_lrn_last_speak = 0; learn_set_say(a + 4, -1, 0); }
         learn_emit_status();
     } else if (strcasecmp(line, "POWER") == 0 || strcasecmp(line, "PHOENIX") == 0) {
         phoenix_emit();
@@ -2086,7 +2089,7 @@ static void s3_amoled_loop() {
     static unsigned long last_peer_ms  = 0;
     static bool          last_boot_btn = true;
     static bool          bright_ramped = false;
-    static char          cmd_buf[96];
+    static char          cmd_buf[160];
     static size_t        cmd_pos = 0;
 
     unsigned long now = millis();

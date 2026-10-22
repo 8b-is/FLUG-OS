@@ -254,3 +254,12 @@ ternary matrix → ayeOS inference → HF-MAC visualization.
    no longer needs the host. Joins briefly, then disconnects and restores the mesh channel + promiscuous capture.
    Credentials live ONLY in the board's NVS (serial: WIFI <ssid> <password> | WIFI SYNC | WIFI CLEAR | WIFI) — never in git.
 ```
+
+## v1.5.0 — the board pushes what it learns (`v1.5.0+learn-speak-push`)
+
+```
+✅ When the learner has something to say, the board briefly joins the hotspot and POSTs it to the Mac
+   (http://<mac>:8089/board/say, per-run token) while speaking on-chip; the Mac speaks it with Kokoro.
+   The Mac address + token are handed to the board over USB serial (HOST <ip> <port> <token>), RAM only.
+   Serial: LEARN SAY <text> (test), WIFI, HOST. Verified: HTTP 200 + Kokoro synthesis + on-chip speech.
+```

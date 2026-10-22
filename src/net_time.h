@@ -6,6 +6,7 @@
 #define FLUGOS_NET_TIME_H
 
 #include <time.h>
+#include <HTTPClient.h>
 
 static char          g_net_ssid[33] = "";
 static char          g_net_pass[65] = "";
@@ -79,6 +80,46 @@ static void net_sync() {
     esp_wifi_set_promiscuous(true);
     esp_wifi_set_channel(S3_MESH_CHANNEL, WIFI_SECOND_CHAN_NONE);
     g_s3_channel = S3_MESH_CHANNEL;
+}
+
+// ---- push a learned sentence to the Mac over the hotspot (HOST set by the bridge over USB; RAM only) ----
+static char     g_host_ip[20] = "";
+static uint16_t g_host_port   = 0;
+static char     g_host_tok[40] = "";
+
+static void net_host_set(const char* a) {   // HOST <ip> <port> <token>
+    char ip[20] = "", tok[40] = "";
+    unsigned port = 0;
+    if (sscanf(a, " %19s %u %39s", ip, &port, tok) == 3) {
+        strncpy(g_host_ip, ip, sizeof(g_host_ip) - 1);
+        strncpy(g_host_tok, tok, sizeof(g_host_tok) - 1);
+        g_host_port = (uint16_t)port;
+    }
+}
+
+static void net_push_say(const char* say, uint32_t seq) {
+    if (!g_net_ssid[0] || !g_host_ip[0] || !g_host_port) return;
+    WiFi.begin(g_net_ssid, g_net_pass[0] ? g_net_pass : NULL);
+    unsigned long t0 = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - t0 < 8000UL) delay(50);
+    int code = -1;
+    if (WiFi.status() == WL_CONNECTED) {
+        HTTPClient h;
+        String url = String("http://") + g_host_ip + ":" + String(g_host_port) + "/board/say";
+        if (h.begin(url)) {
+            h.setTimeout(4000);
+            h.addHeader("Content-Type", "application/json");
+            h.addHeader("X-Triad-Token", g_host_tok);
+            String body = String("{\"node\":\"") + g_medusa_node + "\",\"seq\":" + String((unsigned long)seq) + ",\"say\":\"" + say + "\"}";
+            code = h.POST(body);
+            h.end();
+        }
+    }
+    WiFi.disconnect(false);
+    esp_wifi_set_promiscuous(true);
+    esp_wifi_set_channel(S3_MESH_CHANNEL, WIFI_SECOND_CHAN_NONE);
+    g_s3_channel = S3_MESH_CHANNEL;
+    Serial.printf("# PUSH|{\"node\":\"%s\",\"host\":\"%s:%u\",\"http\":%d}\n", g_medusa_node, g_host_ip, (unsigned)g_host_port, code);
 }
 
 // `WIFI`, `WIFI SYNC`, `WIFI CLEAR`, `WIFI <ssid> <password>`
