@@ -1703,7 +1703,7 @@ static void s3_handle_touch() {
 
 // ============================================================
 // Serial & WebSerial Command Handler
-// (compatible with bridge/s3_amoled_bridge.py, esp32.vaked.dev, AND viz.vaked.dev)
+// (compatible with wigle-triad/host-rs (Rust), esp32.vaked.dev, AND viz.vaked.dev)
 // ============================================================
 static void s3_emit_viz_line() {
     float dose = 0.62f + 0.35f * (g_ms_mean_salience / 100.0f);

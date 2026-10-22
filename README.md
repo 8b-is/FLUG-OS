@@ -83,10 +83,10 @@ esptool.py --chip esp32s3 --port /dev/cu.usbmodem2101 --baud 921600 \
   0x00a00000 .pio/build/esp32s3_amoled/firmware.bin
 
 # Dynamic USB discovery (--all scans all /dev/cu.usbmodem* ports automatically)
-uv run --with pyserial python bridge/s3_amoled_bridge.py --all --status
-uv run --with pyserial python bridge/s3_amoled_bridge.py --all --splash
-uv run --with pyserial python bridge/s3_amoled_bridge.py --all --track 15
-uv run --with pyserial python bridge/s3_amoled_bridge.py --listen --bt "Soundcore Select 4"
+../wigle-triad/host-rs/target/release/wiglewww --send --all --status
+../wigle-triad/host-rs/target/release/wiglewww --send --all --splash
+../wigle-triad/host-rs/target/release/wiglewww --send --all --track 15
+../wigle-triad/host-rs/target/release/wiglewww --send --listen --bt "Soundcore Select 4"
 ```
 
 ## Quick start — Flipper Zero WiFi v1 (3 minutes)
@@ -336,7 +336,7 @@ FLUG-OS/
 │   ├── matrix_decoder.h     # 1:1 packet→ternary matrix decoder
 │   └── version.h            # Semantic versioning + CI commit
 ├── bridge/
-│   ├── s3_amoled_bridge.py  # ESP32-S3 AMOLED <-> zoneInn & Mac host serial bridge
+│   ├── wiglewww --send (Rust)  # ESP32-S3 AMOLED <-> zoneInn & Mac host serial bridge
 │   └── wave_bridge.py       # Serial → HTTP/MIDI wave bridge
 ├── .github/workflows/
 │   └── ci.yml               # Blacksmith CI + PQC signing

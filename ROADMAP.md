@@ -46,7 +46,7 @@ ternary matrix → ayeOS inference → HF-MAC visualization.
 ✅ Ultrawhale 7-stage ternary NAND ring oscillator (peetpedro/ultrawhale-oscillator)
 ✅ Validate live 802.11 promiscuous RSSI & SSID extraction across channels 1-13
 ✅ Complete sine-kernel K(u)=sin(pi*u)/(pi*u) radiation-delta weighting in ternary_seam.h
-✅ Host bridge (bridge/s3_amoled_bridge.py) syncing touchscreen track selection to zoneInn
+✅ Host bridge (wigle-triad/host-rs (Rust)) syncing touchscreen track selection to zoneInn
 ```
 
 ## v0.5.0 — ULTRA-OMNI-ZEN Dual-Board Evolution (1.8" `adaye` × 2.06" `vaked`) (shipped)
@@ -57,7 +57,7 @@ ternary matrix → ayeOS inference → HF-MAC visualization.
 ✅ Tab 0 [ZEN]: baye-rust Jelly Sphere Mind-Wall + 64x64 integer Laplacian 2D Wave Pool + Eye of Aye reticle
 ✅ Orbiting 7-stage Ternary NAND nodes + QMI8658 gyro sickness reactivity + touch-to-splash wave excitation
 ✅ Live ESP-NOW peer capsule sync (S3OmniPeerPacket) between 1.8" adaye (1101) and 2.06" vaked (2101)
-✅ Multi-board host bridge (bridge/s3_amoled_bridge.py --all --status / --splash / --track)
+✅ Multi-board host bridge (wigle-triad/host-rs (Rust) --all --status / --splash / --track)
 ```
 
 ## v0.6.0 — TRIAD INFINITY `{<3, <3, <3}+1 ~---> ∞` 3-Node Mesh (shipped)
@@ -80,7 +80,7 @@ ternary matrix → ayeOS inference → HF-MAC visualization.
 ✅ 7 Bioluminescent Jellyfish Detector Nodes (Alpha, Beta, Gamma, Delta, Epsilon, Zeta, Eta) in 64x64 2D Wave Pool
 ✅ MEM-8 Wave Resonance & Cognitive Ecphory: tidal damping modulation, Cognitive Viscosity (eta), Memory Reynolds (Re_M), expanding Ecphoric Recall Rings
 ✅ Impermanence (Anicca) TTL (ttl_q8: 255 -> 0) & Turritopsis dohrnii MEDUSA <-> POLYP transdifferentiation across the 3-node Triad
-✅ Dynamic USB serial discovery (glob /dev/cu.usbmodem*) in bridge/s3_amoled_bridge.py across USB hub re-enumerations
+✅ Dynamic USB serial discovery (glob /dev/cu.usbmodem*) in wigle-triad/host-rs (Rust) across USB hub re-enumerations
 ```
 
 ## v0.8.0 — MEDUSA-OMNI (`wigle-triad` v0.42.1 WebSerial Fusion × 20-Track `family+1` Crate) (shipped)
@@ -118,7 +118,7 @@ ternary matrix → ayeOS inference → HF-MAC visualization.
    21. Zenebuddhizmus — Akkezdet Phiai (92 BPM, +1)
    22. Kunisada & Kuniyoshi <<<<oOo>>>> — OMNI-CHAN 010001000 (136 BPM, +1)
    23. Moon (And It Went Like) — Kid Francescoli & Julia Minkin (118 BPM, +1)
-✅ Dual-firmware bridge (bridge/s3_amoled_bridge.py --kompress) supporting both FLUG-OS & baye-rust (M8N1 + 48kHz MarineSense + ULTRATX)
+✅ Dual-firmware bridge (wigle-triad/host-rs (Rust) --kompress) supporting both FLUG-OS & baye-rust (M8N1 + 48kHz MarineSense + ULTRATX)
 ```
 
 ## v1.0.0 — VIZ.VAKED.DEV × KOKORO/ES8311 TTS × `{<3,<3,<3}+1` (`v1.0.0+viz-tts-triad-omni`) (current)
