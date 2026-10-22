@@ -346,6 +346,29 @@ static uint8_t    g_viz_kluver       = 0;
 static uint32_t   g_tts_speak_count  = 1;
 static char       g_engine_line[48]  = "qt:66|69632|2712|11";
 
+// wupz seal (same frame + fold as kernel8/kernel/src/wupz.rs and wigle-triad host-rs)
+static void s3_wupz_frame(uint8_t f[32], uint32_t ticks) {
+    static const int8_t  trit[4] = {-1, 0, 1, 1};
+    static const uint16_t hz[4]  = {432, 528, 852, 963};
+    memset(f, 0, 32);
+    for (int i = 0; i < 4; i++) {
+        f[i * 8]     = (uint8_t)trit[i];
+        f[i * 8 + 1] = (uint8_t)(hz[i] & 0xFF);
+        f[i * 8 + 2] = (uint8_t)(hz[i] >> 8);
+        for (int k = 0; k < 4; k++) f[i * 8 + 4 + k] = (uint8_t)(ticks >> (8 * k));
+    }
+}
+static uint64_t s3_wupz_xor_fold(const uint8_t* b, size_t n) {
+    uint64_t acc = 0;
+    for (size_t i = 0; i < n; i++) acc ^= (uint64_t)b[i] << ((i % 8) * 8);
+    return acc;
+}
+static uint32_t s3_wupz_popcount(const uint8_t* b, size_t n) {
+    uint32_t c = 0;
+    for (size_t i = 0; i < n; i++) c += __builtin_popcount(b[i]);
+    return c;
+}
+
 // ============================================================
 // Runtime State
 // ============================================================
@@ -1892,6 +1915,15 @@ static void s3_handle_serial(const char* line) {
         int b = atoi(line + 7);
         if (b >= 10 && b <= 255) s3_amoled_set_brightness((uint8_t)b);
         Serial.printf("{\"cmd\":\"bright\",\"val\":%d}\n", b);
+    } else if (strcasecmp(line, "WUPZ") == 0 || strncasecmp(line, "wupz ", 5) == 0) {
+        uint32_t ticks = (strlen(line) > 5) ? (uint32_t)strtoul(line + 5, NULL, 10) : (uint32_t)(millis() / 1000);
+        uint8_t fr[32];
+        s3_wupz_frame(fr, ticks);
+        char hex[65];
+        for (int i = 0; i < 32; i++) snprintf(hex + i * 2, 3, "%02x", fr[i]);
+        Serial.printf("# WUPZ|{\"node\":\"%s\",\"ticks\":%lu,\"xor_fold\":\"0x%016llx\",\"popcount\":%lu,\"frame\":\"%s\",\"src\":\"wupz+kernel8\"}\n",
+                      g_medusa_node, (unsigned long)ticks,
+                      (unsigned long long)s3_wupz_xor_fold(fr, 32), (unsigned long)s3_wupz_popcount(fr, 32), hex);
     } else if (strncasecmp(line, "engine ", 7) == 0) {
         // ENGINE <qt>|<layers>|<family_hz>|<ct000 bits>  (fed by 8b-is-music + 8b-is-engine via wiglewww)
         strncpy(g_engine_line, line + 7, sizeof(g_engine_line) - 1);
