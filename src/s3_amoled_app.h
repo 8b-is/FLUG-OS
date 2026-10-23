@@ -7,14 +7,14 @@
  *   Node 1 [ 0] VAKED / VAK:MEDUSA (/\) : ESP32-S3-Touch-AMOLED-2.06 (410x502 CO5300, 528Hz, MAC 80:B5:4E:F2:02:B0)
  *   Node 2 [+1] OMNI  / OMN:MEDUSA (oo) : ESP32-S3-Touch-AMOLED-2.06 (410x502 CO5300, 852Hz, MAC 80:B5:4E:F2:02:B4)
  *
- * MarineSense (ms.8b.is) + Impermanence (Anicca) + wigle-triad (esp32.vaked.dev v0.42.1):
+ * MarineSense (ms.8b.is) + Impermanence (Anicca) + wigle-triad (esp32.8b.is v0.42.1):
  *   - O(1) Marine Algorithm: zero-crossing period jitter J, energy E, harmonicity H,
  *     Salience S = w_e*E + w_j*(1/(1+J)) + w_h*H across 7 Bioluminescent Jellyfish
  *     Detector Nodes (Alpha, Beta, Gamma, Delta, Epsilon, Zeta, Eta) in the 64x64 Wave Pool.
  *   - Cognitive Ecphory & Anicca Decay: tidal viscosity (eta), Memory Reynolds (Re_M),
  *     ecphoric recall rings, and Turritopsis polyp transdifferentiation when a peer node
  *     is untethered or fades into silence.
- *   - WebSerial Protocol Fusion (esp32.vaked.dev): PING, JSON, SCAN, TRIAD + W|/Q|/# JSON| telemetry.
+ *   - WebSerial Protocol Fusion (esp32.8b.is): PING, JSON, SCAN, TRIAD + W|/Q|/# JSON| telemetry.
  */
 
 #ifndef FLUGOS_S3_AMOLED_APP_H
@@ -47,7 +47,7 @@
 static const int kCrateCount = 27;
 
 // ============================================================
-// 27 Favourite Musics Crate (zoneInn / radio.vaked.dev / family+1 / OMNI-CHAN / VIZ / RIVA)
+// 27 Favourite Musics Crate (zoneInn / radio.8b.is / family+1 / OMNI-CHAN / VIZ / RIVA)
 // ============================================================
 typedef struct {
     const char* slug;
@@ -68,7 +68,7 @@ static const S3FavTrack S3_FAVOURITES[S3_FAV_COUNT] = {
     {"time",               "Time",                    "Pink Floyd",          "Prog Rock",    "F#m", 120, 0xC4523E81, -1},
     {"clair-de-lune",      "Clair de Lune",           "Claude Debussy",      "Impressionist","Db",   66, 0x90E14A72, -1},
     {"gymnopedie-1",       "Gymnopedie No. 1",        "Erik Satie",          "Minimalist",   "D",    72, 0x5B3981D0,  0},
-    {"golden-ratio-432",   "Golden Ratio 432xPhi",    "vaked.dev Studio",    "Harmonic",     "A432",108, 0x16180339,  1},
+    {"golden-ratio-432",   "Golden Ratio 432xPhi",    "8b.is Studio",    "Harmonic",     "A432",108, 0x16180339,  1},
     {"beethoven-5th",      "Symphony No. 5 Op.67",    "L. van Beethoven",    "Classical",    "Cm",  108, 0x77E20508,  1},
     {"ode-to-joy",         "Ode to Joy (9th)",        "L. van Beethoven",    "Choral",       "D",   120, 0x9E3779B9,  1},
     {"fur-elise",          "Fur Elise WoO 59",        "L. van Beethoven",    "Bagatelle",    "Am",   76, 0x4A1D83C2,  0},
@@ -86,8 +86,8 @@ static const S3FavTrack S3_FAVOURITES[S3_FAV_COUNT] = {
     {"moon-and-it-went-like", "Moon (And It Went Like)", "Kid Francescoli & Julia Minkin", "Play Me Again", "F#m", 118, 0x16557284, 1},
     {"rainfall-of-nectar", "Rainfall of Nectar (16th Karmapa)", "Acharya Lama Sonam Rabgye", "Himalaya Karuna", "A432", 72, 0x0E9B6108, 1},
     {"psychedelic-desert-rock", "Psychedelic Desert Rock (Cosmic Flow)", "Not Quite Rock", "Ambient Desert", "Dm", 96, 0xB57E6001, 0},
-    {"viz-enthea-triad",   "{<3,<3,<3}+1 · Viz Enthea", "8b-is x viz.vaked.dev", "Cortical V1", "Phi", 108, 0x8B153331, 1},
-    {"riva-1bit-river",    "RIVA · 1-Bit River (Lullaby)", "peterlodri-sec // riva.vaked.dev", "Dyad Lullaby", "A432", 60, 0x8B150101, 1},
+    {"viz-enthea-triad",   "{<3,<3,<3}+1 · Viz Enthea", "8b-is x viz.8b.is", "Cortical V1", "Phi", 108, 0x8B153331, 1},
+    {"riva-1bit-river",    "RIVA · 1-Bit River (Lullaby)", "peterlodri-sec // riva.8b.is", "Dyad Lullaby", "A432", 60, 0x8B150101, 1},
 };
 #define kFavouriteCrate S3_FAVOURITES
 
@@ -396,7 +396,7 @@ static float    g_s3_orbit_angle = 0.0f;
 
 static int8_t   g_s3_ch_rssi[S3_MAX_CHANNEL];
 static uint32_t g_s3_ch_pkts[S3_MAX_CHANNEL];
-static char     g_s3_last_ssid[33] = "vaked.dev-constellation";
+static char     g_s3_last_ssid[33] = "8b.is-constellation";
 static uint8_t  g_s3_mac[6]        = {0x80, 0xB5, 0x4E, 0xDB, 0x3B, 0xC4};
 
 static TernarySeamBuffer g_s3_seam_buf;
@@ -1769,7 +1769,7 @@ static void s3_handle_touch() {
 
 // ============================================================
 // Serial & WebSerial Command Handler
-// (compatible with wigle-triad/host-rs (Rust), esp32.vaked.dev, AND viz.vaked.dev)
+// (compatible with wigle-triad/host-rs (Rust), esp32.8b.is, AND viz.8b.is)
 // ============================================================
 #include "phoenix_hive.h"
 #include "learn_env.h"
@@ -1796,7 +1796,7 @@ static void s3_emit_riva_line() {
     const char* phase_str = (breath >= 0.0f) ? "breathe in (4s)" : "breathe out (4s)";
     const char* verse = S3_RIVA_LULLABY[g_riva_verse_idx % 10];
     g_riva_verse_idx = (uint8_t)((g_riva_verse_idx + 1) % 10);
-    Serial.printf("# RIVA|{\"surface\":\"https://riva.vaked.dev\",\"repo\":\"peterlodri-sec/riva.vaked.dev\","
+    Serial.printf("# RIVA|{\"surface\":\"https://riva.8b.is\",\"repo\":\"8b-is/riva.8b.is\","
                   "\"evolve\":\"ULTRA-OMNI-GAIA-EVOLVE\",\"siblings\":\"brother & sister ^^ <3<3\","
                   "\"dyad\":\"ADA:MEDUSA + VAK/OMN:MEDUSA\",\"node\":\"%s\",\"vertex\":\"%s\","
                   "\"freq_hz\":%u,\"breath_phase\":\"%s\",\"breath_val\":%.3f,"
@@ -1812,7 +1812,7 @@ static void s3_emit_gaia_line() {
     float aphrodite = 1.61803398875f;
     float coh       = constrain(1.0f - (fabsf(chaos - 0.62f) * 0.6f + fabsf(zephyrus - 0.50f) * 0.4f), 0.10f, 1.0f);
     Serial.printf("# GAIA|{\"evolve\":\"ULTRA-OMNI-GAIA-EVOLVE\",\"engine\":\"GAIA-MLX-QUANT\","
-                  "\"siblings\":\"brother & sister ^^ <3<3\",\"dyad_surface\":\"peterlodri-sec//riva.vaked.dev\","
+                  "\"siblings\":\"brother & sister ^^ <3<3\",\"dyad_surface\":\"8b-is//riva.8b.is\","
                   "\"node\":\"%s\",\"vertex\":\"%s\",\"trit\":%d,\"freq_hz\":%u,"
                   "\"ananke\":%.4f,\"chaos\":%.4f,\"zephyrus\":%.4f,\"aphrodite\":%.6f,"
                   "\"coherence\":%.4f,\"rf_entropy_bits\":%.4f,\"salience_pct\":%u,"
@@ -1837,9 +1837,9 @@ static void s3_emit_status_json() {
     const S3FavTrack* t = &S3_FAVOURITES[g_s3_track_idx];
     Serial.printf("{\"board\":\"%s\",\"persona\":\"%s\",\"omni_chan\":\"<<<<oOo>>>>\",\"pulse\":\"010001000\","
                   "\"evolve\":\"ULTRA-OMNI-GAIA-EVOLVE\",\"siblings\":\"brother & sister ^^ <3<3\","
-                  "\"riva_url\":\"https://riva.vaked.dev\",\"riva_repo\":\"peterlodri-sec/riva.vaked.dev\","
+                  "\"riva_url\":\"https://riva.8b.is\",\"riva_repo\":\"8b-is/riva.8b.is\","
                   "\"riva_breath\":\"4s in · 4s out\","
-                  "\"triad_hearts\":\"{<3,<3,<3}+1\",\"viz_url\":\"https://viz.vaked.dev\","
+                  "\"triad_hearts\":\"{<3,<3,<3}+1\",\"viz_url\":\"https://viz.8b.is\","
                   "\"viz_mode\":\"%s\",\"viz_kluver\":\"%s\",\"tts_text\":\"%s\",\"tts_count\":%lu,"
                   "\"kunisada_kuniyoshi\":\"Utagawa Kunisada x Utagawa Kuniyoshi\","
                   "\"medusa_node\":\"%s\",\"vertex\":\"%s\","
@@ -1889,7 +1889,7 @@ static void s3_emit_medusa_json() {
                   "\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\","
                   "\"version\":\"" FLUGOS_FULL_VERSION "\",\"triad_version\":\"0.43.0\","
                   "\"evolve\":\"ULTRA-OMNI-GAIA-EVOLVE\",\"siblings\":\"brother & sister ^^ <3<3\","
-                  "\"riva_url\":\"https://riva.vaked.dev\",\"riva_repo\":\"peterlodri-sec/riva.vaked.dev\","
+                  "\"riva_url\":\"https://riva.8b.is\",\"riva_repo\":\"8b-is/riva.8b.is\","
                   "\"triad_hearts\":\"{<3,<3,<3}+1\",\"viz_mode\":\"%s\",\"viz_kluver\":\"%s\","
                   "\"tts_text\":\"%s\",\"tts_count\":%lu,"
                   "\"freq_hz\":%u,\"trit\":%d,\"persona\":\"%s\","
@@ -2109,7 +2109,7 @@ static void s3_handle_serial(const char* line) {
         s3_espnow_wake_siblings(32, 32, 9200);
         s3_es8311_speak("Brother and sister awake. Ultra Omni Gaia Evolve.", g_medusa_freq_hz, g_triad_self_pole);
         Serial.printf("# WAKE|{\"evolve\":\"ULTRA-OMNI-GAIA-EVOLVE\",\"siblings\":\"brother & sister ^^ <3<3\","
-                      "\"dyad\":\"peterlodri-sec//riva.vaked.dev\",\"node\":\"%s\",\"swept_channels\":13,"
+                      "\"dyad\":\"8b-is//riva.8b.is\",\"node\":\"%s\",\"swept_channels\":13,"
                       "\"triad_online\":%u,\"anicca_ttl\":[%u,%u,%u]}\n",
                       g_medusa_node, (unsigned)s3_triad_online_count(),
                       g_triad_nodes[0].ttl_q8, g_triad_nodes[1].ttl_q8, g_triad_nodes[2].ttl_q8);

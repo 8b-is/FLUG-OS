@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-FLUG-OS Wave Bridge — pipe raw 802.11 packet waves to music.vaked.dev.
+FLUG-OS Wave Bridge — pipe raw 802.11 packet waves to music.8b.is.
 
 Reads wave output from FLUG-OS over serial, formats for generative music,
-and streams to music.vaked.dev (or any HTTP endpoint).
+and streams to music.8b.is (or any HTTP endpoint).
 
 Usage:
   python3 bridge/wave_bridge.py /dev/tty.usbserial-XXXX         # read + dump
   python3 bridge/wave_bridge.py --mode wave /dev/tty.wchusbserial*  # synth waves
-  python3 bridge/wave_bridge.py --http https://music.vaked.dev/wave /dev/tty.*
+  python3 bridge/wave_bridge.py --http https://music.8b.is/wave /dev/tty.*
 """
 
 import argparse
@@ -89,11 +89,11 @@ PARSERS = {
 
 
 # ============================================================
-# FLUG-OS data → music.vaked.dev format
+# FLUG-OS data → music.8b.is format
 # ============================================================
 
 def to_music_vaked(data: dict) -> dict:
-    """Convert FLUG-OS wave data to music.vaked.dev compatible format."""
+    """Convert FLUG-OS wave data to music.8b.is compatible format."""
     ts = int(time.time() * 1000)
 
     if "freq" in data:
@@ -177,7 +177,7 @@ def main():
     import serial
 
     parser = argparse.ArgumentParser(
-        description="FLUG-OS Wave Bridge — pipe WiFi packet waves to music.vaked.dev",
+        description="FLUG-OS Wave Bridge — pipe WiFi packet waves to music.8b.is",
     )
     parser.add_argument("port", help="Serial port (e.g., /dev/tty.usbserial-*)")
     parser.add_argument("--baud", type=int, default=115200, help="Baud rate")

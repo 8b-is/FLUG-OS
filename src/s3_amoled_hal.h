@@ -1,6 +1,6 @@
 /*
  * FLUG-OS — Waveshare ESP32-S3-Touch-AMOLED-1.8 & 2.06 Unified HAL
- * ULTRA-OMNI-ZEN Sovereign Constellation Hardware Target (vaked.dev × 8b-is)
+ * ULTRA-OMNI-ZEN Sovereign Constellation Hardware Target (8b.is × 8b-is)
  *
  * Runtime Auto-Detection via Shared I2C Bus (SDA=15, SCL=14 @ 400kHz):
  *   1. Waveshare ESP32-S3-Touch-AMOLED-1.8 (detected via TCA9554 @ 0x20):

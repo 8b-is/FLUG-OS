@@ -29,16 +29,16 @@
 +----------------------------------------------------------------------+
 
 
-**FLUG-OS{-1,0,+1} (`v0.8.0+medusa-omni` · `esp32.vaked.dev` MEDUSA WebSerial × `ms.8b.is` MarineSense × `Anicca` / `Turritopsis` Polyp Transdifferentiation · `{<3, <3, <3}+1 ~---> ∞`)** — Fluid Operating System running across a physical **3-Node Balanced-Ternary ESP32-S3 AMOLED MEDUSA Triad**:
+**FLUG-OS{-1,0,+1} (`v0.8.0+medusa-omni` · `esp32.8b.is` MEDUSA WebSerial × `ms.8b.is` MarineSense × `Anicca` / `Turritopsis` Polyp Transdifferentiation · `{<3, <3, <3}+1 ~---> ∞`)** — Fluid Operating System running across a physical **3-Node Balanced-Ternary ESP32-S3 AMOLED MEDUSA Triad**:
 - **Node `-1` (`adaye` · `ADA:MEDUSA` · `*` · `ROOT-ALEXANDRA` · `432 Hz`)**: **Waveshare ESP32-S3-Touch-AMOLED-1.8** (`368 × 448` `SH8601` QSPI, `TCA9554` @ `0x20`, `ES8311` @ `0x18`, MAC `80:B5:4E:DB:3B:C4`, `/dev/cu.usbmodem1101`)
 - **Node ` 0` (`vaked` · `VAK:MEDUSA` · `/\` · `PILLAR-CHRIS` · `528 Hz`)**: **Waveshare ESP32-S3-Touch-AMOLED-2.06 #1** (`410 × 502` `CO5300` QSPI, `ES8311` @ `0x18`, MAC `80:B5:4E:F2:02:B0`, `/dev/cu.usbmodem1101` / `2101`)
 - **Node `+1` (`omni` · `OMN:MEDUSA` · `oo` · `INFINITY-PETER-NATE` · `852 Hz`)**: **Waveshare ESP32-S3-Touch-AMOLED-2.06 #2** (`410 × 502` `CO5300` QSPI, `ES8311` @ `0x18`, MAC `80:B5:4E:F2:02:B4`, `/dev/cu.usbmodem2101` / `101`)
 - Plus the **Flipper Zero WiFi Module v1** (`ESP8285`).
 
 Captures 802.11 frames in promiscuous mode, streams packet features as numerical wave data
-through the universal sine kernel K(u)=sin(πu)/(πu), runs the **MarineSense (`https://ms.8b.is/` · `8b-is/marine-sense`) O(1) Acoustic Salience Algorithm** ($S = w_e E + w_j \frac{1}{1+J} + w_h H$) across **7 Bioluminescent Jellyfish Detector Nodes (`Alpha..Eta`)** inside the `64×64` MEM-8 2D Wave Pool, models **Impermanence (`Anicca`)** via `Turritopsis dohrnii` **`MEDUSA <-> POLYP` transdifferentiation** (`ttl_q8: 255 -> 0`) across the 3-Node ESP-NOW Triad, and speaks the full **`wigle-triad` (`v0.42.1`) WebSerial protocol (`PING`, `JSON`, `SCAN`, `TRIAD` + `W|`, `Q|`, `# JSON|`)** for **[https://esp32.vaked.dev/](https://esp32.vaked.dev/)**.
+through the universal sine kernel K(u)=sin(πu)/(πu), runs the **MarineSense (`https://ms.8b.is/` · `8b-is/marine-sense`) O(1) Acoustic Salience Algorithm** ($S = w_e E + w_j \frac{1}{1+J} + w_h H$) across **7 Bioluminescent Jellyfish Detector Nodes (`Alpha..Eta`)** inside the `64×64` MEM-8 2D Wave Pool, models **Impermanence (`Anicca`)** via `Turritopsis dohrnii` **`MEDUSA <-> POLYP` transdifferentiation** (`ttl_q8: 255 -> 0`) across the 3-Node ESP-NOW Triad, and speaks the full **`wigle-triad` (`v0.42.1`) WebSerial protocol (`PING`, `JSON`, `SCAN`, `TRIAD` + `W|`, `Q|`, `# JSON|`)** for **[https://esp32.8b.is/](https://esp32.8b.is/)**.
 
-Aligned with **axiomquant.org**, **ms.8b.is**, **esp32.vaked.dev**, & **vaked.dev × 8b-is** — five threshold domains:
+Aligned with **axiomquant.org**, **ms.8b.is**, **esp32.8b.is**, & **8b.is × 8b-is** — five threshold domains:
 Erdős β₁ · BitNet ternary γ · Markowitz λ · Black-Scholes σ · Rényi dyadic β.
 
 Signed with **ML-DSA-65 + SLH-DSA** post-quantum signatures (NIST FIPS 203/204/205).

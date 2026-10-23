@@ -42,7 +42,7 @@ ternary matrix → ayeOS inference → HF-MAC visualization.
 ✅ AXP2101 PMIC rail initialization (DCDC1 + ALDO1..4 3.3V) & battery monitoring
 ✅ FT3168 capacitive touch navigation across 4 Constellation tabs (RADIO, 802.11, NAND, QWAVE)
 ✅ QMI8658 6-axis IMU -> qwave QuantTern 6-bit VAD affect (qt:xx) & 2D Lissajous phase tilt
-✅ zoneInn / radio.vaked.dev 14 Favourite Musics Crate + 8-band Ternary EQ on device
+✅ zoneInn / radio.8b.is 14 Favourite Musics Crate + 8-band Ternary EQ on device
 ✅ Ultrawhale 7-stage ternary NAND ring oscillator (peetpedro/ultrawhale-oscillator)
 ✅ Validate live 802.11 promiscuous RSSI & SSID extraction across channels 1-13
 ✅ Complete sine-kernel K(u)=sin(pi*u)/(pi*u) radiation-delta weighting in ternary_seam.h
@@ -86,7 +86,7 @@ ternary matrix → ayeOS inference → HF-MAC visualization.
 ## v0.8.0 — MEDUSA-OMNI (`wigle-triad` v0.42.1 WebSerial Fusion × 20-Track `family+1` Crate) (shipped)
 
 ```
-✅ Fused wigle-triad (v0.42.1) WebSerial protocol for https://esp32.vaked.dev/:
+✅ Fused wigle-triad (v0.42.1) WebSerial protocol for https://esp32.8b.is/:
    PING -> # PONG|<medusa_node>|<mac>|<millis>
    JSON / STATUS -> # JSON|{...} + standard FLUG-OS status JSON
    SCAN -> W|<bssid>|<ssid>|WPA2-PSK|<ch>|<rssi> + Q|<medusa_node>|<vertex>|<mac>|<seq>|... + # JSON|{...}
@@ -125,7 +125,7 @@ ternary matrix → ayeOS inference → HF-MAC visualization.
 
 ```
 ✅ Tab 5 [VIZ / ENTHEA]: Live cortical form-constant visualizer preview (Klüver T1 Tunnel 432Hz, T2 Spiral 528Hz,
-   T3 Lattice 852Hz, T4 Cobweb 963Hz) + 8 ENTHEA shader modes synchronized with https://viz.vaked.dev/
+   T3 Lattice 852Hz, T4 Cobweb 963Hz) + 8 ENTHEA shader modes synchronized with https://viz.8b.is/
 ✅ {<3,<3,<3}+1 Four-Heart Triad Resonance Bar:
    [-1] ADA:MEDUSA (* · 432 Hz) · [0] VAK:MEDUSA (/\ · 528 Hz) · [+1] OMN:MEDUSA (oo · 852 Hz) · [+1] OMNI HEART (963 Hz)
 ✅ ES8311 On-Chip Formant & 4-Heart Chord TTS Synthesizer (s3_es8311_speak) + Kokoro (:8420/:8430) Serial/HTTP Bridge
@@ -168,7 +168,7 @@ ternary matrix → ayeOS inference → HF-MAC visualization.
 🧪 Real-time sine wave synthesis from packet RSSI
 🧪 MIDI note output over UART (serial MIDI)
 🧪 OSC output over UDP (if WiFi is enabled for output)
-🧪 Bridge to music.vaked.dev via HTTP (bridge/wave_bridge.py done)
+🧪 Bridge to music.8b.is via HTTP (bridge/wave_bridge.py done)
 🧪 Record wave sessions to .wav via bridge
 ```
 

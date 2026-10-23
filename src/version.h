@@ -36,8 +36,8 @@
 #define FLUGOS_HAS_IMPERMANENCE   1   /* v0.7.0: MarineSense O(1) + Anicca*/
 #define FLUGOS_HAS_MEDUSA_OMNI    1   /* v0.8.0: MEDUSA WebSerial + 20-track crate */
 #define FLUGOS_HAS_KOMPRESS_OMNI_CHAN 1 /* v0.9.0: All-Entropy Kompress-Super-Ultra <<<<oOo>>>> ~ Kunisada & Kuniyoshi 010001000 */
-#define FLUGOS_HAS_VIZ_TTS_OMNI   1   /* v1.0.0: viz.vaked.dev ENTHEA V1 shader bridge + ES8311 Formant/Harmonic TTS + {<3,<3,<3}+1 */
-#define FLUGOS_HAS_ULTRA_OMNI_GAIA_EVOLVE 1 /* v1.6.0: ULTRA-OMNI-GAIA-EVOLVE + brother & sister ^^ <3<3 + peterlodri-sec//riva.vaked.dev */
+#define FLUGOS_HAS_VIZ_TTS_OMNI   1   /* v1.0.0: viz.8b.is ENTHEA V1 shader bridge + ES8311 Formant/Harmonic TTS + {<3,<3,<3}+1 */
+#define FLUGOS_HAS_ULTRA_OMNI_GAIA_EVOLVE 1 /* v1.6.0: ULTRA-OMNI-GAIA-EVOLVE + brother & sister ^^ <3<3 + 8b-is//riva.8b.is */
 #define FLUGOS_HAS_RIVA_DYAD      1   /* v1.6.0: RIVA 1-bit river (4s in, 4s out) lullaby & 13-ch sibling wake-up */
 #define FLUGOS_HAS_MEMNET_EXPORT  0   /* v1.1.0: ayeOS capsule over UART*/
 #define FLUGOS_HAS_PWM_AUDIO      0   /* v1.2.0: GPIO headphone synth   */
