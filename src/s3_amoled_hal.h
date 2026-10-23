@@ -408,11 +408,28 @@ static bool s3_axp2101_init() {
     }
     g_power.present = true;
 
-    // Non-destructive AXP2101 init (matches oxi-phoenix/baye-rust/src/drivers/axp2101.rs):
-    // Leave factory DCDC1..5 & ALDO1..4 rails untouched so neither 1.8" nor 2.06" rails drop,
-    // and enable battery voltage ADC bit 0 on register 0x30.
-    uint8_t adc = s3_i2c_read8(I2C_ADDR_AXP2101, 0x30, 0x00);
-    s3_i2c_write8(I2C_ADDR_AXP2101, 0x30, adc | 0x01);
+    s3_i2c_write8(I2C_ADDR_AXP2101, 0x22, 0b00000110);
+    s3_i2c_write8(I2C_ADDR_AXP2101, 0x27, 0x10);
+
+    // Enable DCDC1 @ 3.3V while preserving any other active DCDC rails
+    uint8_t dcdc_en = s3_i2c_read8(I2C_ADDR_AXP2101, 0x80, 0x01);
+    s3_i2c_write8(I2C_ADDR_AXP2101, 0x80, dcdc_en | 0x01);
+    s3_i2c_write8(I2C_ADDR_AXP2101, 0x82, (3300 - 1500) / 100);
+
+    // Set ALDO1, ALDO2, ALDO3, ALDO4 = 3.3V (powers AMOLED, Touch, Audio & IMU on 1.8" & 2.06")
+    uint8_t aldo_3v3 = (3300 - 500) / 100; // 0x1C
+    s3_i2c_write8(I2C_ADDR_AXP2101, 0x92, aldo_3v3);
+    s3_i2c_write8(I2C_ADDR_AXP2101, 0x93, aldo_3v3);
+    s3_i2c_write8(I2C_ADDR_AXP2101, 0x94, aldo_3v3);
+    s3_i2c_write8(I2C_ADDR_AXP2101, 0x95, aldo_3v3);
+
+    uint8_t ldo_en = s3_i2c_read8(I2C_ADDR_AXP2101, 0x90, 0x00);
+    s3_i2c_write8(I2C_ADDR_AXP2101, 0x90, ldo_en | 0x3F);
+
+    // Enable battery voltage & system ADC channels (0x30 = 0x3F)
+    s3_i2c_write8(I2C_ADDR_AXP2101, 0x30, 0x3F);
+    s3_i2c_write8(I2C_ADDR_AXP2101, 0x62, 0x08);
+    s3_i2c_write8(I2C_ADDR_AXP2101, 0x64, 0x03);
     return true;
 }
 

@@ -2151,10 +2151,9 @@ static void s3_amoled_setup() {
     }
 
     Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, 400000);
-    bool is_18 = s3_tca9554_init_and_reset();
-
-    bool pmic_ok = s3_axp2101_init();
-    delay(20);
+    bool pmic_ok   = s3_axp2101_init();
+    delay(30);
+    bool is_18     = s3_tca9554_init_and_reset();
     bool audio_ok  = s3_es8311_init();
     bool es7210_ok = s3_es7210_init();
 
