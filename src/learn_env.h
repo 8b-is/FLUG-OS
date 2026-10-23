@@ -31,6 +31,7 @@ static unsigned long g_lrn_last_tick = 0, g_lrn_last_save = 0, g_lrn_last_speak 
 static unsigned long g_lrn_feat_cool[LRN_FEATS] = {0};
 static uint32_t g_lrn_prev_pkts = 0;
 static bool     g_lrn_ready_said[LRN_BUCKETS] = {false};
+static uint32_t g_lrn_corpus_total = 0, g_lrn_corpus_wifi = 0, g_lrn_corpus_ble = 0, g_lrn_corpus_bt = 0, g_lrn_corpus_lte = 0;
 
 static const char* const LRN_NAME[LRN_FEATS] = {"networks", "entropy", "rssi", "motion", "peers", "traffic"};
 static const float LRN_SD_FLOOR[LRN_FEATS]   = {1.5f, 0.15f, 3.0f, 0.08f, 0.5f, 20.0f};
@@ -41,6 +42,11 @@ static void learn_load() {
         if (p.getBytesLength("ls") == sizeof(g_lrn)) p.getBytes("ls", g_lrn, sizeof(g_lrn));
         g_lrn_speak = p.getBool("spk", true);
         g_clk_tz = p.getLong("tz", g_clk_tz);
+        g_lrn_corpus_total = p.getUInt("ctot", 0);
+        g_lrn_corpus_wifi  = p.getUInt("cwifi", 0);
+        g_lrn_corpus_ble   = p.getUInt("cble", 0);
+        g_lrn_corpus_bt    = p.getUInt("cbt", 0);
+        g_lrn_corpus_lte   = p.getUInt("clte", 0);
         p.end();
     }
     for (int b = 0; b < LRN_BUCKETS; b++) for (int i = 0; i < LRN_FEATS; i++) g_lrn_total += g_lrn[b][i].n;
@@ -52,6 +58,11 @@ static void learn_save() {
     if (p.begin("learn", false)) {
         p.putBytes("ls", g_lrn, sizeof(g_lrn));
         p.putBool("spk", g_lrn_speak);
+        p.putUInt("ctot", g_lrn_corpus_total);
+        p.putUInt("cwifi", g_lrn_corpus_wifi);
+        p.putUInt("cble", g_lrn_corpus_ble);
+        p.putUInt("cbt", g_lrn_corpus_bt);
+        p.putUInt("clte", g_lrn_corpus_lte);
         p.end();
     }
 }
@@ -139,13 +150,35 @@ static void learn_tick(unsigned long now) {
 static void learn_emit_status() {
     const LrnStat* row = g_lrn[g_lrn_hour < 24 ? g_lrn_hour : 24];
     Serial.printf("# LEARN|{\"node\":\"%s\",\"status\":1,\"seq\":%lu,\"say\":\"%s\",\"hour\":%u,\"speak\":%d,\"samples\":%lu,\"bucket_n\":%u,"
+                  "\"corpus\":{\"total\":%lu,\"wifi\":%lu,\"ble\":%lu,\"bt\":%lu,\"lte\":%lu},"
                   "\"x\":[%.2f,%.2f,%.1f,%.2f,%.0f,%.1f],\"z\":[%.2f,%.2f,%.2f,%.2f,%.2f,%.2f],"
                   "\"mean\":[%.2f,%.2f,%.1f,%.2f,%.2f,%.1f]}\n",
                   g_medusa_node, (unsigned long)g_lrn_say_seq, g_lrn_say, (unsigned)g_lrn_hour, g_lrn_speak ? 1 : 0,
                   (unsigned long)g_lrn_total, (unsigned)row[0].n,
+                  (unsigned long)g_lrn_corpus_total, (unsigned long)g_lrn_corpus_wifi,
+                  (unsigned long)g_lrn_corpus_ble, (unsigned long)g_lrn_corpus_bt, (unsigned long)g_lrn_corpus_lte,
                   g_lrn_x[0], g_lrn_x[1], g_lrn_x[2], g_lrn_x[3], g_lrn_x[4], g_lrn_x[5],
                   g_lrn_z[0], g_lrn_z[1], g_lrn_z[2], g_lrn_z[3], g_lrn_z[4], g_lrn_z[5],
                   row[0].mean, row[1].mean, row[2].mean, row[3].mean, row[4].mean, row[5].mean);
+}
+
+// CORPUS <total> <wifi> <ble> <bt> <lte> -> stores imported WiGLE corpus baseline in NVS
+static void learn_set_corpus(const char* args) {
+    unsigned long tot = 0, wf = 0, bl = 0, bt = 0, lt = 0;
+    sscanf(args, "%lu %lu %lu %lu %lu", &tot, &wf, &bl, &bt, &lt);
+    bool changed = (tot != g_lrn_corpus_total);
+    g_lrn_corpus_total = (uint32_t)tot;
+    g_lrn_corpus_wifi  = (uint32_t)wf;
+    g_lrn_corpus_ble   = (uint32_t)bl;
+    g_lrn_corpus_bt    = (uint32_t)bt;
+    g_lrn_corpus_lte   = (uint32_t)lt;
+    learn_save();
+    if (changed && tot > 0) {
+        char m[112];
+        snprintf(m, sizeof(m), "I learned %lu known Wi-Fi and %lu Bluetooth endpoints from WiGLE.", wf, bl + bt);
+        learn_set_say(m, -1, 0);
+    }
+    learn_emit_status();
 }
 
 // TIME <epoch_s> <tz_offset_s>  -> selects the hour-of-day bucket

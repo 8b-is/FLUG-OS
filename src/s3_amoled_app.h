@@ -2030,6 +2030,34 @@ static void s3_handle_serial(const char* line) {
         net_command(line + 4);
     } else if (strncasecmp(line, "time ", 5) == 0) {
         learn_set_time(line + 5);
+    } else if (strncasecmp(line, "corpus ", 7) == 0) {
+        learn_set_corpus(line + 7);
+    } else if (strncasecmp(line, "seed ", 5) == 0) {
+        // SEED <bssid>|<ssid>|<ch>|<rssi>
+        const char* p1 = strchr(line + 5, '|');
+        const char* p2 = p1 ? strchr(p1 + 1, '|') : NULL;
+        const char* p3 = p2 ? strchr(p2 + 1, '|') : NULL;
+        if (p1 && p2 && p3) {
+            unsigned int m[6] = {0};
+            if (sscanf(line + 5, "%2x:%2x:%2x:%2x:%2x:%2x", &m[0], &m[1], &m[2], &m[3], &m[4], &m[5]) == 6) {
+                uint8_t bssid[6] = {(uint8_t)m[0], (uint8_t)m[1], (uint8_t)m[2], (uint8_t)m[3], (uint8_t)m[4], (uint8_t)m[5]};
+                int slot = -1;
+                for (int s = 0; s < g_medusa_ap_count; s++) {
+                    if (g_medusa_aps[s].used && memcmp(g_medusa_aps[s].bssid, bssid, 6) == 0) { slot = s; break; }
+                }
+                if (slot < 0) {
+                    slot = (g_medusa_ap_count < S3_MAX_APS) ? g_medusa_ap_count++ : (int)(g_s3_total_pkts % S3_MAX_APS);
+                }
+                g_medusa_aps[slot].used = true;
+                memcpy(g_medusa_aps[slot].bssid, bssid, 6);
+                size_t slen = (size_t)(p2 - (p1 + 1));
+                if (slen > 32) slen = 32;
+                memcpy(g_medusa_aps[slot].ssid, p1 + 1, slen);
+                g_medusa_aps[slot].ssid[slen] = '\0';
+                g_medusa_aps[slot].ch   = (uint8_t)constrain(atoi(p2 + 1), 1, 14);
+                g_medusa_aps[slot].rssi = (int8_t)constrain(atoi(p3 + 1), -110, -1);
+            }
+        }
     } else if (strncasecmp(line, "learn", 5) == 0) {
         const char* a = line + 5;
         while (*a == ' ') a++;
