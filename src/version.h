@@ -10,20 +10,20 @@
 #define FLUGOS_VERSION_H
 
 #define FLUGOS_VERSION_MAJOR  1
-#define FLUGOS_VERSION_MINOR  5
-#define FLUGOS_VERSION_PATCH  0
-#define FLUGOS_VERSION_STR    "1.5.0"
-#define FLUGOS_VERSION_STRING "1.5.0"
+#define FLUGOS_VERSION_MINOR  6
+#define FLUGOS_VERSION_PATCH  1
+#define FLUGOS_VERSION_STR    "1.6.1"
+#define FLUGOS_VERSION_STRING "1.6.1"
 
 /* Build metadata — populated by PlatformIO build_flags if set */
 #ifndef FLUGOS_COMMIT
-#define FLUGOS_COMMIT         "learn-speak-push"
+#define FLUGOS_COMMIT         "pranayama-dream-baba-engine"
 #endif
 
 #define FLUGOS_FULL_VERSION   "v" FLUGOS_VERSION_STR "+" FLUGOS_COMMIT
 
 /* Roadmap milestone alignment */
-#define FLUGOS_MLX_QUANT_PARITY_TARGET  "1.4.2"
+#define FLUGOS_MLX_QUANT_PARITY_TARGET  "1.6.0"
 
 /* Feature flags for this release */
 #define FLUGOS_HAS_SPECTRUM       1   /* v0.3.0: 14-ch RSSI + waterfall */
@@ -37,6 +37,8 @@
 #define FLUGOS_HAS_MEDUSA_OMNI    1   /* v0.8.0: MEDUSA WebSerial + 20-track crate */
 #define FLUGOS_HAS_KOMPRESS_OMNI_CHAN 1 /* v0.9.0: All-Entropy Kompress-Super-Ultra <<<<oOo>>>> ~ Kunisada & Kuniyoshi 010001000 */
 #define FLUGOS_HAS_VIZ_TTS_OMNI   1   /* v1.0.0: viz.vaked.dev ENTHEA V1 shader bridge + ES8311 Formant/Harmonic TTS + {<3,<3,<3}+1 */
+#define FLUGOS_HAS_ULTRA_OMNI_GAIA_EVOLVE 1 /* v1.6.0: ULTRA-OMNI-GAIA-EVOLVE + brother & sister ^^ <3<3 + peterlodri-sec//riva.vaked.dev */
+#define FLUGOS_HAS_RIVA_DYAD      1   /* v1.6.0: RIVA 1-bit river (4s in, 4s out) lullaby & 13-ch sibling wake-up */
 #define FLUGOS_HAS_MEMNET_EXPORT  0   /* v1.1.0: ayeOS capsule over UART*/
 #define FLUGOS_HAS_PWM_AUDIO      0   /* v1.2.0: GPIO headphone synth   */
 #define FLUGOS_HAS_PCAP_EXPORT    0   /* v1.3.0: Wireshark over UART    */

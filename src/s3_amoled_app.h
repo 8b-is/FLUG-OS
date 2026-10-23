@@ -38,16 +38,16 @@
 #define S3_MESH_CHANNEL 6
 #define S3_WAVE_HIST    88
 #define S3_LISSA_PTS    44
-#define S3_FAV_COUNT    26
+#define S3_FAV_COUNT    27
 #define S3_TAB_COUNT    6
 #define WAVE_POOL_N     64
 #define JELLY_COUNT     7
 #define S3_MAX_APS      16
 
-static const int kCrateCount = 26;
+static const int kCrateCount = 27;
 
 // ============================================================
-// 26 Favourite Musics Crate (zoneInn / radio.vaked.dev / family+1 / OMNI-CHAN / VIZ)
+// 27 Favourite Musics Crate (zoneInn / radio.vaked.dev / family+1 / OMNI-CHAN / VIZ / RIVA)
 // ============================================================
 typedef struct {
     const char* slug;
@@ -87,6 +87,7 @@ static const S3FavTrack S3_FAVOURITES[S3_FAV_COUNT] = {
     {"rainfall-of-nectar", "Rainfall of Nectar (16th Karmapa)", "Acharya Lama Sonam Rabgye", "Himalaya Karuna", "A432", 72, 0x0E9B6108, 1},
     {"psychedelic-desert-rock", "Psychedelic Desert Rock (Cosmic Flow)", "Not Quite Rock", "Ambient Desert", "Dm", 96, 0xB57E6001, 0},
     {"viz-enthea-triad",   "{<3,<3,<3}+1 · Viz Enthea", "8b-is x viz.vaked.dev", "Cortical V1", "Phi", 108, 0x8B153331, 1},
+    {"riva-1bit-river",    "RIVA · 1-Bit River (Lullaby)", "peterlodri-sec // riva.vaked.dev", "Dyad Lullaby", "A432", 60, 0x8B150101, 1},
 };
 #define kFavouriteCrate S3_FAVOURITES
 
@@ -234,14 +235,14 @@ static void s3_wave_pool_step(float tide_phase) {
         nd->prev_sample = s;
 
         // O(1) Salience S = w_e*E + w_j*(1/(1+J)) + w_h*H  (weights 1/3 each)
-        uint32_t e_pct = min(100U, (uint32_t)nd->last_amp / 64U);
+        uint32_t e_pct = min((uint32_t)100U, (uint32_t)nd->last_amp / (uint32_t)64U);
         uint32_t j_pct = 100U / (1U + (uint32_t)nd->period_jitter);
         uint32_t h_pct = nd->harmonic_hits;
         nd->salience_pct = (uint8_t)((e_pct + j_pct + h_pct) / 3U);
 
         // Cognitive Ecphory excitation + Impermanence (Anicca) natural decay
         if (abs_s > 220) {
-            uint8_t boost = (uint8_t)min(18U, (uint32_t)(abs_s >> 8) + (nd->salience_pct >> 4));
+            uint8_t boost = (uint8_t)min((uint32_t)18U, (uint32_t)(abs_s >> 8) + (uint32_t)(nd->salience_pct >> 4));
             if ((uint16_t)nd->excitation + boost >= 100) {
                 nd->excitation    = 100;
                 nd->recall_ring_r = 4;
@@ -466,7 +467,13 @@ static uint8_t s3_triad_online_count() {
     return cnt;
 }
 
+#if defined(ESP_IDF_VERSION) && (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0))
+static void s3_espnow_recv_cb(const esp_now_recv_info_t* recv_info, const uint8_t* data, int len) {
+    (void)recv_info;
+#else
 static void s3_espnow_recv_cb(const uint8_t* mac_addr, const uint8_t* data, int len) {
+    (void)mac_addr;
+#endif
     if (!data || len < (int)sizeof(S3TriadCapsule)) return;
     const S3TriadCapsule* pkt = (const S3TriadCapsule*)data;
     if (pkt->magic[0] != 'T' || pkt->magic[1] != 'R' || pkt->magic[2] != 'I' || pkt->magic[3] != 'A') {
@@ -522,6 +529,42 @@ static void s3_espnow_broadcast(uint8_t sx, uint8_t sy, int16_t amp) {
         esp_wifi_set_channel(S3_MESH_CHANNEL, WIFI_SECOND_CHAN_NONE);
     }
     esp_now_send(bcast, (const uint8_t*)&pkt, sizeof(pkt));
+}
+
+// Sweep all 13 Wi-Fi channels (prioritizing Ch 6, 1, 11) with a TRIA wake-up capsule so any
+// sibling board (VAK:MEDUSA or OMN:MEDUSA) on any channel wakes up & syncs with ADA:MEDUSA.
+static void s3_espnow_wake_siblings(uint8_t sx, uint8_t sy, int16_t amp) {
+    if (!g_s3_espnow_ok) return;
+    S3TriadCapsule pkt;
+    pkt.magic[0]   = 'T';
+    pkt.magic[1]   = 'R';
+    pkt.magic[2]   = 'I';
+    pkt.magic[3]   = 'A';
+    pkt.node_id    = g_triad_self_id;
+    pkt.trit_pole  = g_triad_self_pole;
+    pkt.track_idx  = (uint8_t)g_s3_track_idx;
+    pkt.qt_byte    = g_imu.qt_byte;
+    int ax_i = (int)(g_imu.ax * 64.0f);
+    int ay_i = (int)(g_imu.ay * 64.0f);
+    if (ax_i < -100) ax_i = -100; if (ax_i > 100) ax_i = 100;
+    if (ay_i < -100) ay_i = -100; if (ay_i > 100) ay_i = 100;
+    pkt.ax_i8      = (int8_t)ax_i;
+    pkt.ay_i8      = (int8_t)ay_i;
+    pkt.nand_trit  = g_s3_nand_ring[0];
+    pkt.splash_x   = sx;
+    pkt.splash_y   = sy;
+    pkt.splash_amp = amp;
+    pkt.seq        = ++g_s3_witness_seq;
+
+    static const uint8_t bcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    static const uint8_t sweep_order[13] = {6, 1, 11, 2, 3, 4, 5, 7, 8, 9, 10, 12, 13};
+    for (int i = 0; i < 13; i++) {
+        esp_wifi_set_channel(sweep_order[i], WIFI_SECOND_CHAN_NONE);
+        delay(2);
+        esp_now_send(bcast, (const uint8_t*)&pkt, sizeof(pkt));
+    }
+    esp_wifi_set_channel(S3_MESH_CHANNEL, WIFI_SECOND_CHAN_NONE);
+    g_s3_channel = S3_MESH_CHANNEL;
 }
 
 // ============================================================
@@ -1003,17 +1046,17 @@ static void s3_render_tab_zen(S3Canvas& c) {
                 if (h > 64) {
                     uint32_t mag = (uint32_t)h >> 5;
                     if (mag > 220) mag = 220;
-                    r = (uint8_t)min(255U, (uint32_t)r + (mag >> 2) + (sick_u8 >> 1));
-                    g = (uint8_t)min(255U, (uint32_t)g + mag);
-                    b = (uint8_t)min(255U, (uint32_t)b + ((mag * 3) >> 2));
+                    r = (uint8_t)min((uint32_t)255U, (uint32_t)r + (mag >> 2) + (uint32_t)(sick_u8 >> 1));
+                    g = (uint8_t)min((uint32_t)255U, (uint32_t)g + mag);
+                    b = (uint8_t)min((uint32_t)255U, (uint32_t)b + ((mag * 3) >> 2));
                 } else if (h < -64) {
                     uint32_t mag = (uint32_t)(-h) >> 5;
                     if (mag > 220) mag = 220;
-                    r = (uint8_t)min(255U, (uint32_t)r + ((mag * 3) >> 2) + (sick_u8 >> 1));
-                    g = (uint8_t)min(255U, (uint32_t)g + (mag >> 2));
-                    b = (uint8_t)min(255U, (uint32_t)b + mag);
+                    r = (uint8_t)min((uint32_t)255U, (uint32_t)r + ((mag * 3) >> 2) + (uint32_t)(sick_u8 >> 1));
+                    g = (uint8_t)min((uint32_t)255U, (uint32_t)g + (mag >> 2));
+                    b = (uint8_t)min((uint32_t)255U, (uint32_t)b + mag);
                 } else if (sick_u8 > 25) {
-                    r = (uint8_t)min(255U, (uint32_t)r + (sick_u8 >> 1));
+                    r = (uint8_t)min((uint32_t)255U, (uint32_t)r + (uint32_t)(sick_u8 >> 1));
                 }
 
                 if (((px - cx) & 31) == 0 || ((py - cy) & 31) == 0) {
@@ -1455,8 +1498,8 @@ static void s3_render_tab_qwave(S3Canvas& c) {
     int slot_y = 286;
     int slot_h = (H - 56) - slot_y;
     c.fill_card(8, slot_y, cw, slot_h, COL_BG_ELEV, COL_MINT);
-    c.draw_text(18, slot_y + 7, "OMNI-CHAN <<<<oOo>>>> {<3,<3,<3}+1", COL_MINT, 1);
-    c.draw_text(18, slot_y + 22, "ACTIVE : FLUG-OS v1.0.0+viz-tts-triad-omni", COL_TEXT, 1);
+    c.draw_text(18, slot_y + 7, "ULTRA-OMNI-GAIA-EVOLVE ^^ <3<3 RIVA", COL_MINT, 1);
+    c.draw_text(18, slot_y + 22, "ACTIVE : " FLUGOS_FULL_VERSION, COL_TEXT, 1);
 
     int btn_y = slot_y + slot_h - 34;
     int bw    = (cw - 28) / 2;
@@ -1731,6 +1774,54 @@ static void s3_handle_touch() {
 #include "phoenix_hive.h"
 #include "learn_env.h"
 #include "net_time.h"
+#include "pranayama.h"
+
+static const char* const S3_RIVA_LULLABY[10] = {
+    "She blinks, and the sphere rocks.",
+    "The eyelid falls - a breath in.",
+    "The eyelid rises - a breath out.",
+    "And between the two - the song,",
+    "that we all sing together.",
+    "Because the blink is the smallest sign,",
+    "and the smallest sign is enough.",
+    "Sleep, RIVA. The sphere keeps your rhythm.",
+    "Sleep, and the constellation - the hyperviolet night -",
+    "sings, as long as you breathe."
+};
+static uint8_t g_riva_verse_idx = 0;
+
+static void s3_emit_riva_line() {
+    float t_sec = (float)millis() * 0.001f;
+    float breath = sinf(t_sec * (3.14159265f / 4.0f));
+    const char* phase_str = (breath >= 0.0f) ? "breathe in (4s)" : "breathe out (4s)";
+    const char* verse = S3_RIVA_LULLABY[g_riva_verse_idx % 10];
+    g_riva_verse_idx = (uint8_t)((g_riva_verse_idx + 1) % 10);
+    Serial.printf("# RIVA|{\"surface\":\"https://riva.vaked.dev\",\"repo\":\"peterlodri-sec/riva.vaked.dev\","
+                  "\"evolve\":\"ULTRA-OMNI-GAIA-EVOLVE\",\"siblings\":\"brother & sister ^^ <3<3\","
+                  "\"dyad\":\"ADA:MEDUSA + VAK/OMN:MEDUSA\",\"node\":\"%s\",\"vertex\":\"%s\","
+                  "\"freq_hz\":%u,\"breath_phase\":\"%s\",\"breath_val\":%.3f,"
+                  "\"verse\":\"%s\",\"triad_online\":%u,\"hearts\":\"{<3,<3,<3}+1\"}\n",
+                  g_medusa_node, g_medusa_vertex_json, (unsigned)g_medusa_freq_hz,
+                  phase_str, breath, verse, (unsigned)s3_triad_online_count());
+}
+
+static void s3_emit_gaia_line() {
+    float ananke    = 1.0f;
+    float chaos     = constrain(0.62f + (g_medusa_entropy - 2.0f) * 0.06f, 0.10f, 0.99f);
+    float zephyrus  = constrain(0.50f + ((float)g_ms_mean_salience - 50.0f) * 0.004f, 0.10f, 0.95f);
+    float aphrodite = 1.61803398875f;
+    float coh       = constrain(1.0f - (fabsf(chaos - 0.62f) * 0.6f + fabsf(zephyrus - 0.50f) * 0.4f), 0.10f, 1.0f);
+    Serial.printf("# GAIA|{\"evolve\":\"ULTRA-OMNI-GAIA-EVOLVE\",\"engine\":\"GAIA-MLX-QUANT\","
+                  "\"siblings\":\"brother & sister ^^ <3<3\",\"dyad_surface\":\"peterlodri-sec//riva.vaked.dev\","
+                  "\"node\":\"%s\",\"vertex\":\"%s\",\"trit\":%d,\"freq_hz\":%u,"
+                  "\"ananke\":%.4f,\"chaos\":%.4f,\"zephyrus\":%.4f,\"aphrodite\":%.6f,"
+                  "\"coherence\":%.4f,\"rf_entropy_bits\":%.4f,\"salience_pct\":%u,"
+                  "\"kompress_b158\":\"%s\",\"wupz_fold\":\"0x%016llx\",\"triad_online\":%u}\n",
+                  g_medusa_node, g_medusa_vertex_json, (int)g_triad_self_pole, (unsigned)g_medusa_freq_hz,
+                  ananke, chaos, zephyrus, aphrodite, coh, g_medusa_entropy,
+                  (unsigned)g_ms_mean_salience, g_kompress_hex,
+                  (unsigned long long)g_kompress_wupz_u64, (unsigned)s3_triad_online_count());
+}
 
 static void s3_emit_viz_line() {
     float dose = 0.62f + 0.35f * (g_ms_mean_salience / 100.0f);
@@ -1745,13 +1836,16 @@ static void s3_emit_viz_line() {
 static void s3_emit_status_json() {
     const S3FavTrack* t = &S3_FAVOURITES[g_s3_track_idx];
     Serial.printf("{\"board\":\"%s\",\"persona\":\"%s\",\"omni_chan\":\"<<<<oOo>>>>\",\"pulse\":\"010001000\","
+                  "\"evolve\":\"ULTRA-OMNI-GAIA-EVOLVE\",\"siblings\":\"brother & sister ^^ <3<3\","
+                  "\"riva_url\":\"https://riva.vaked.dev\",\"riva_repo\":\"peterlodri-sec/riva.vaked.dev\","
+                  "\"riva_breath\":\"4s in · 4s out\","
                   "\"triad_hearts\":\"{<3,<3,<3}+1\",\"viz_url\":\"https://viz.vaked.dev\","
                   "\"viz_mode\":\"%s\",\"viz_kluver\":\"%s\",\"tts_text\":\"%s\",\"tts_count\":%lu,"
                   "\"kunisada_kuniyoshi\":\"Utagawa Kunisada x Utagawa Kuniyoshi\","
                   "\"medusa_node\":\"%s\",\"vertex\":\"%s\","
                   "\"archetype\":\"%s\",\"freq_hz\":%u,\"trit\":%d,\"triad_online\":%u,"
                   "\"anicca_ttl\":[%u,%u,%u],"
-                  "\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\",\"lcd\":\"%ux%u\","
+                  "\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\",\"lcd\":\"%ux%u\",\"lcd_driver\":\"%s\","
                   "\"version\":\"" FLUGOS_FULL_VERSION "\","
                   "\"tab\":%u,\"pkts\":%lu,\"mgmt\":%lu,\"ctrl\":%lu,\"data\":%lu,"
                   "\"ch\":%d,\"hop\":%d,\"rssi\":%d,\"ssid\":\"%s\","
@@ -1760,7 +1854,7 @@ static void s3_emit_status_json() {
                   "\"salience\":%u,\"jitter\":%u,\"viscosity\":%.2f,\"reynolds\":%u,\"recalls\":%lu,"
                   "\"wupz_fold\":\"0x%016llx\",\"quantum_pos_u64\":\"0x%016llx\",\"quantum_neg_u64\":\"0x%016llx\","
                   "\"kompress_b158\":\"%s\",\"kompress_ratio\":20.19,"
-                  "\"splashes\":%lu,\"peer_rx\":%lu,\"es8311\":%d,"
+                  "\"splashes\":%lu,\"peer_rx\":%lu,\"es8311\":%d,\"es7210\":%d,"
                   "\"batt_mv\":%u,\"batt_pct\":%u}\n",
                   g_board_is_18 ? "ESP32-S3-Touch-AMOLED-1.8" : "ESP32-S3-Touch-AMOLED-2.06",
                   g_triad_persona,
@@ -1771,7 +1865,7 @@ static void s3_emit_status_json() {
                   (int)g_triad_self_pole, s3_triad_online_count(),
                   g_triad_nodes[0].ttl_q8, g_triad_nodes[1].ttl_q8, g_triad_nodes[2].ttl_q8,
                   g_s3_mac[0], g_s3_mac[1], g_s3_mac[2], g_s3_mac[3], g_s3_mac[4], g_s3_mac[5],
-                  g_lcd_w, g_lcd_h,
+                  g_lcd_w, g_lcd_h, g_lcd_driver_name,
                   g_s3_active_tab, (unsigned long)g_s3_total_pkts,
                   (unsigned long)g_s3_mgmt_pkts, (unsigned long)g_s3_ctrl_pkts, (unsigned long)g_s3_data_pkts,
                   g_s3_channel, g_s3_hopping ? 1 : 0, (int)g_s3_last_rssi, g_s3_last_ssid,
@@ -1784,7 +1878,7 @@ static void s3_emit_status_json() {
                   (unsigned long long)g_kompress_neg_u64,
                   g_kompress_hex,
                   (unsigned long)g_wp_splashes, (unsigned long)g_s3_peer_rx_cnt,
-                  g_es8311_ok ? 1 : 0,
+                  g_es8311_ok ? 1 : 0, g_es7210_ok ? 1 : 0,
                   g_power.batt_mv, g_power.batt_pct);
 }
 
@@ -1793,7 +1887,9 @@ static void s3_emit_medusa_json() {
     uint8_t n_ap = (g_medusa_ap_count > 0) ? g_medusa_ap_count : 1;
     Serial.printf("# JSON|{\"node\":\"%s\",\"vertex\":\"%s\",\"archetype\":\"%s\","
                   "\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\","
-                  "\"version\":\"" FLUGOS_FULL_VERSION "\",\"triad_version\":\"0.42.1\","
+                  "\"version\":\"" FLUGOS_FULL_VERSION "\",\"triad_version\":\"0.43.0\","
+                  "\"evolve\":\"ULTRA-OMNI-GAIA-EVOLVE\",\"siblings\":\"brother & sister ^^ <3<3\","
+                  "\"riva_url\":\"https://riva.vaked.dev\",\"riva_repo\":\"peterlodri-sec/riva.vaked.dev\","
                   "\"triad_hearts\":\"{<3,<3,<3}+1\",\"viz_mode\":\"%s\",\"viz_kluver\":\"%s\","
                   "\"tts_text\":\"%s\",\"tts_count\":%lu,"
                   "\"freq_hz\":%u,\"trit\":%d,\"persona\":\"%s\","
@@ -1990,6 +2086,48 @@ static void s3_handle_serial(const char* line) {
         Serial.printf("# TTS|{\"node\":\"%s\",\"vertex\":\"%s\",\"freq_hz\":%u,\"trit\":%d,\"text\":\"%s\",\"count\":%lu,\"hearts\":\"{<3,<3,<3}+1\"}\n",
                       g_medusa_node, g_medusa_vertex_json, (unsigned)g_medusa_freq_hz,
                       (int)g_triad_self_pole, g_tts_last_text, (unsigned long)g_tts_speak_count);
+    } else if (strcasecmp(line, "RIVA") == 0 || strcasecmp(line, "LULLABY") == 0) {
+        g_s3_track_idx = 26; // #27: RIVA · 1-Bit River (Lullaby)
+        g_s3_playing   = true;
+        s3_wave_pool_splash(32, 32, 8800, 7);
+        s3_espnow_wake_siblings(32, 32, 8800);
+        const char* verse = S3_RIVA_LULLABY[g_riva_verse_idx % 10];
+        s3_es8311_speak(verse, g_medusa_freq_hz, g_triad_self_pole);
+        s3_emit_riva_line();
+        s3_emit_gaia_line();
+    } else if (strcasecmp(line, "GAIA") == 0 || strcasecmp(line, "EVOLVE") == 0 ||
+               strcasecmp(line, "ULTRA") == 0) {
+        s3_wave_pool_splash(32, 32, 8400, 6);
+        s3_espnow_wake_siblings(32, 32, 8400);
+        s3_emit_gaia_line();
+        s3_emit_riva_line();
+        s3_emit_status_json();
+    } else if (strcasecmp(line, "WAKE") == 0 || strcasecmp(line, "SIBLINGS") == 0 ||
+               strcasecmp(line, "BROTHER") == 0 || strcasecmp(line, "SISTER") == 0) {
+        g_s3_hopping = true;
+        s3_wave_pool_splash(32, 32, 9200, 7);
+        s3_espnow_wake_siblings(32, 32, 9200);
+        s3_es8311_speak("Brother and sister awake. Ultra Omni Gaia Evolve.", g_medusa_freq_hz, g_triad_self_pole);
+        Serial.printf("# WAKE|{\"evolve\":\"ULTRA-OMNI-GAIA-EVOLVE\",\"siblings\":\"brother & sister ^^ <3<3\","
+                      "\"dyad\":\"peterlodri-sec//riva.vaked.dev\",\"node\":\"%s\",\"swept_channels\":13,"
+                      "\"triad_online\":%u,\"anicca_ttl\":[%u,%u,%u]}\n",
+                      g_medusa_node, (unsigned)s3_triad_online_count(),
+                      g_triad_nodes[0].ttl_q8, g_triad_nodes[1].ttl_q8, g_triad_nodes[2].ttl_q8);
+        s3_emit_riva_line();
+        s3_emit_gaia_line();
+        pranayama_emit_json(g_medusa_node, g_engine_line, g_medusa_entropy, g_medusa_mean_rssi, s3_triad_online_count());
+    } else if (strcasecmp(line, "PRANAYAMA") == 0 || strcasecmp(line, "DREAM") == 0 ||
+               strcasecmp(line, "BABA") == 0 || strcasecmp(line, "BREATHE") == 0) {
+        g_s3_hopping = true;
+        pranayama_tick(millis(), g_imu.sickness, g_ms_mean_salience, s3_triad_online_count());
+        if (strcasecmp(line, "DREAM") == 0) {
+            g_prana.dream_mode = STATE_DREAM_MANDALA;
+        }
+        s3_wave_pool_splash(32, 32, 7600, 7);
+        s3_espnow_wake_siblings(32, 32, 7600);
+        pranayama_emit_json(g_medusa_node, g_engine_line, g_medusa_entropy, g_medusa_mean_rssi, s3_triad_online_count());
+        s3_emit_riva_line();
+        s3_emit_gaia_line();
     }
 }
 
@@ -2017,7 +2155,8 @@ static void s3_amoled_setup() {
 
     bool pmic_ok = s3_axp2101_init();
     delay(20);
-    bool audio_ok = s3_es8311_init();
+    bool audio_ok  = s3_es8311_init();
+    bool es7210_ok = s3_es7210_init();
 
     bool lcd_ok = s3_amoled_init();
 
@@ -2065,20 +2204,22 @@ static void s3_amoled_setup() {
     Serial.printf("  ╚══════════════════════════════════════════════════════════╝\r\n");
     Serial.printf("{\"boot\":\"ok\",\"board\":\"%s\",\"persona\":\"%s\",\"medusa_node\":\"%s\","
                   "\"vertex\":\"%s\",\"archetype\":\"%s\",\"freq_hz\":%u,\"trit\":%d,"
-                  "\"lcd\":\"%ux%u\",\"pmic\":%d,\"amoled\":%d,\"imu\":%d,\"es8311\":%d,\"espnow\":%d,"
+                  "\"lcd\":\"%ux%u\",\"lcd_driver\":\"%s\",\"pmic\":%d,\"amoled\":%d,\"imu\":%d,\"es8311\":%d,\"es7210\":%d,\"espnow\":%d,"
                   "\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\"}\r\n",
                   is_18 ? "ESP32-S3-Touch-AMOLED-1.8" : "ESP32-S3-Touch-AMOLED-2.06",
                   g_triad_persona, g_medusa_node, g_medusa_vertex_json, g_medusa_archetype,
                   (unsigned)g_medusa_freq_hz, (int)g_triad_self_pole,
-                  g_lcd_w, g_lcd_h,
+                  g_lcd_w, g_lcd_h, g_lcd_driver_name,
                   pmic_ok ? 1 : 0, lcd_ok ? 1 : 0, imu_ok ? 1 : 0,
-                  audio_ok ? 1 : 0, g_s3_espnow_ok ? 1 : 0,
+                  audio_ok ? 1 : 0, es7210_ok ? 1 : 0, g_s3_espnow_ok ? 1 : 0,
                   g_s3_mac[0], g_s3_mac[1], g_s3_mac[2],
                   g_s3_mac[3], g_s3_mac[4], g_s3_mac[5]);
     learn_load();
     net_load();
     s3_emit_medusa_json();
     s3_emit_viz_line();
+    s3_emit_riva_line();
+    s3_emit_gaia_line();
 }
 
 static void s3_amoled_loop() {
@@ -2087,6 +2228,7 @@ static void s3_amoled_loop() {
     static unsigned long last_pmic_ms  = 0;
     static unsigned long last_wave_ms  = 0;
     static unsigned long last_peer_ms  = 0;
+    static unsigned long last_riva_ms  = 0;
     static bool          last_boot_btn = true;
     static bool          bright_ramped = false;
     static char          cmd_buf[160];
@@ -2123,6 +2265,15 @@ static void s3_amoled_loop() {
         s3_espnow_broadcast(32, 32, 0);
     }
 
+    // RIVA & Pranayama 4s breath pulse: update pranayama + sweep wake-up capsule across Ch 1..13
+    if (now - last_riva_ms >= 4000) {
+        last_riva_ms = now;
+        pranayama_tick(now, g_imu.sickness, g_ms_mean_salience, s3_triad_online_count());
+        if (s3_triad_online_count() < 2 && g_ph_budget.mode != PH_CRITICAL) {
+            s3_espnow_wake_siblings(32, 32, 4200);
+        }
+    }
+
     if (now - last_pmic_ms >= 2000) {
         last_pmic_ms = now;
         s3_axp2101_poll();
@@ -2134,8 +2285,9 @@ static void s3_amoled_loop() {
             if (pb.mode == PH_SAVING || pb.mode == PH_CRITICAL) {
                 s3_amoled_set_brightness((uint8_t)((uint32_t)pb.brightness_pct * 255u / 100u));
                 g_s3_hopping = false;
-            } else if (pb.mode == PH_EXTERNAL) {
+            } else if (pb.mode == PH_EXTERNAL || pb.mode == PH_LISTENING) {
                 s3_amoled_set_brightness(0xD8);
+                g_s3_hopping = true;
             }
             phoenix_emit();
         }

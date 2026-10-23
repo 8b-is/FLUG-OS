@@ -56,12 +56,24 @@ static uint16_t g_lcd_x_gap   = 0;
 #define PIN_TP_RST_206      9
 #define PIN_TP_INT_18       21
 #define PIN_TP_INT_206      38
+#define PIN_SD_CS_206       17
 #define PIN_SPEAKER_EN      46
 #define PIN_BOOT_BTN        0
+
+// I2S Pinout: 1.8" uses BCLK=9/DOUT=8/DIN=10; 2.06" uses BCLK=41/DOUT=40/DIN=42 (GPIO 8/9 are LCD_RST/TP_RST!)
+#define PIN_I2S_MCLK        16
+#define PIN_I2S_LRCLK       45
+#define PIN_I2S_BCLK_18     9
+#define PIN_I2S_DOUT_18     8
+#define PIN_I2S_DIN_18      10
+#define PIN_I2S_BCLK_206    41
+#define PIN_I2S_DOUT_206    40
+#define PIN_I2S_DIN_206     42
 
 #define I2C_ADDR_TCA9554    0x20
 #define I2C_ADDR_AXP2101    0x34
 #define I2C_ADDR_FT3168     0x38
+#define I2C_ADDR_ES7210     0x40
 #define I2C_ADDR_QMI8658    0x6B
 #define I2C_ADDR_PCF85063   0x51
 #define I2C_ADDR_ES8311     0x18
@@ -130,21 +142,45 @@ static uint8_t s3_i2c_read8(uint8_t addr, uint8_t reg, uint8_t fallback = 0) {
 }
 
 // ============================================================
-// TCA9554 I/O Expander (0x20) — Present on ESP32-S3-Touch-AMOLED-1.8
-// Toggles pins 0..2 LOW -> HIGH to reset SH8601, FT3168, and ES8311
+// TCA9554 I/O Expander (0x20) vs 2.06" Direct Reset (GPIO 8 + GPIO 9)
+// 1.8" toggles TCA9554 pins 0..2 LOW -> HIGH to reset SH8601, FT3168, ES8311.
+// 2.06" (detected via FLUGOS_BOARD_206, ES7210 @ 0x40, or absent TCA9554 @ 0x20)
+// toggles GPIO 8 (LCD_RST) + GPIO 9 (TP_RST) LOW 20ms -> HIGH 150ms (baye-rust parity).
 // ============================================================
+static const char* g_lcd_driver_name = "SH8601";
+static bool        g_es7210_ok       = false;
+
 static bool s3_tca9554_init_and_reset() {
-    if (!s3_i2c_probe(I2C_ADDR_TCA9554)) {
-        g_board_is_18 = false;
-        g_lcd_w       = 410;
-        g_lcd_h       = 502;
-        g_lcd_x_gap   = 0x16;
+#if defined(FLUGOS_BOARD_206)
+    bool force_206 = true;
+#else
+    bool force_206 = false;
+#endif
+    bool has_es7210  = s3_i2c_probe(I2C_ADDR_ES7210);
+    bool has_tca9554 = s3_i2c_probe(I2C_ADDR_TCA9554);
+
+    if (force_206 || has_es7210 || !has_tca9554) {
+        g_board_is_18     = false;
+        g_lcd_w           = 410;
+        g_lcd_h           = 502;
+        g_lcd_x_gap       = 22; // 0x16 column offset for 410x502 CO5300 panel
+        g_lcd_driver_name = "CO5300";
+        // Waveshare 2.06" dedicated LCD_RST (GPIO 8) and TP_RST (GPIO 9) reset sequence (baye-rust tca9554.rs)
+        gpio_set_direction((gpio_num_t)PIN_LCD_RST_206, GPIO_MODE_OUTPUT);
+        gpio_set_direction((gpio_num_t)PIN_TP_RST_206, GPIO_MODE_OUTPUT);
+        gpio_set_level((gpio_num_t)PIN_LCD_RST_206, 0);
+        gpio_set_level((gpio_num_t)PIN_TP_RST_206, 0);
+        delay(20);
+        gpio_set_level((gpio_num_t)PIN_LCD_RST_206, 1);
+        gpio_set_level((gpio_num_t)PIN_TP_RST_206, 1);
+        delay(150);
         return false;
     }
-    g_board_is_18 = true;
-    g_lcd_w       = 368;
-    g_lcd_h       = 448;
-    g_lcd_x_gap   = 0;
+    g_board_is_18     = true;
+    g_lcd_w           = 368;
+    g_lcd_h           = 448;
+    g_lcd_x_gap       = 0;
+    g_lcd_driver_name = "SH8601";
     // Set pins 0..2 as outputs (0 = output, 1 = input -> 0xF8 = 0b11111000)
     if (!s3_i2c_write8(I2C_ADDR_TCA9554, 0x03, 0xF8)) return false;
     // Assert reset (drive pins 0..2 LOW)
@@ -154,6 +190,36 @@ static bool s3_tca9554_init_and_reset() {
     s3_i2c_write8(I2C_ADDR_TCA9554, 0x01, 0x07);
     delay(50);
     return true;
+}
+
+// ============================================================
+// ES7210 Dual-Mic ADC (0x40) — Present on ESP32-S3-Touch-AMOLED-2.06
+// Exact register sequence & readback check from oxi-phoenix/baye-rust/src/drivers/es7210.rs
+// ============================================================
+static bool s3_es7210_init() {
+    if (g_board_is_18 || !s3_i2c_probe(I2C_ADDR_ES7210)) {
+        g_es7210_ok = false;
+        return false;
+    }
+    s3_i2c_write8(I2C_ADDR_ES7210, 0x00, 0xFF);
+    delay(10);
+    static const uint8_t seq[][2] = {
+        {0x00, 0x41}, {0x01, 0x3F}, {0x09, 0x30}, {0x0A, 0x30},
+        {0x23, 0x2A}, {0x22, 0x0A}, {0x20, 0x0A}, {0x21, 0x2A},
+        {0x08, 0x00}, {0x40, 0x43}, {0x41, 0x70}, {0x42, 0x70},
+        {0x07, 0x20}, {0x02, 0xC1}, {0x11, 0x60}, {0x12, 0x00},
+        {0x01, 0x34}, {0x06, 0x00}, {0x47, 0x08}, {0x48, 0x08},
+        {0x49, 0xFF}, {0x4A, 0xFF}, {0x4B, 0x00}, {0x4C, 0xFF},
+        {0x43, 0x16}, {0x44, 0x16}, {0x45, 0x00}, {0x46, 0x00},
+        {0x40, 0x43}, {0x00, 0x71}, {0x00, 0x41}
+    };
+    for (size_t i = 0; i < sizeof(seq) / sizeof(seq[0]); i++) {
+        s3_i2c_write8(I2C_ADDR_ES7210, seq[i][0], seq[i][1]);
+    }
+    delay(50);
+    g_es7210_ok = (s3_i2c_read8(I2C_ADDR_ES7210, 0x11, 0) == 0x60) &&
+                  (s3_i2c_read8(I2C_ADDR_ES7210, 0x43, 0) == 0x16);
+    return g_es7210_ok;
 }
 
 // ============================================================
@@ -220,8 +286,8 @@ static bool     g_i2s_tts_ready = false;
 static uint32_t g_tts_utterances = 0;
 static char     g_tts_last_text[64] = "{<3,<3,<3}+1 MEDUSA TRIAD ONLINE";
 
-static void s3_es8311_init_i2s_18() {
-    if (!g_board_is_18 || g_i2s_tts_ready) return;
+static void s3_es8311_init_i2s() {
+    if (g_i2s_tts_ready) return;
     i2s_config_t cfg;
     memset(&cfg, 0, sizeof(cfg));
     cfg.mode                 = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX);
@@ -238,10 +304,10 @@ static void s3_es8311_init_i2s_18() {
     if (i2s_driver_install(I2S_NUM_0, &cfg, 0, NULL) == ESP_OK) {
         i2s_pin_config_t pins;
         memset(&pins, 0, sizeof(pins));
-        pins.mck_io_num   = 16;
-        pins.bck_io_num   = 9;
-        pins.ws_io_num    = 45;
-        pins.data_out_num = 8;
+        pins.mck_io_num   = PIN_I2S_MCLK;
+        pins.bck_io_num   = g_board_is_18 ? PIN_I2S_BCLK_18 : PIN_I2S_BCLK_206;
+        pins.ws_io_num    = PIN_I2S_LRCLK;
+        pins.data_out_num = g_board_is_18 ? PIN_I2S_DOUT_18 : PIN_I2S_DOUT_206;
         pins.data_in_num  = I2S_PIN_NO_CHANGE;
         if (i2s_set_pin(I2S_NUM_0, &pins) == ESP_OK) {
             g_i2s_tts_ready = true;
@@ -258,75 +324,66 @@ static void s3_es8311_speak(const char* text, uint16_t carrier_hz, int8_t trit) 
     if (!g_es8311_ok) return;
     digitalWrite(PIN_SPEAKER_EN, HIGH);
 
-    if (g_board_is_18) {
-        s3_es8311_init_i2s_18();
-        if (g_i2s_tts_ready) {
-            int16_t stereo_buf[256]; // 128 stereo frames (8ms @ 16kHz)
-            float phase0 = 0.0f, phase1 = 0.0f, phase2 = 0.0f;
-            // Pre-chime: {<3,<3,<3}+1 triad chord (432 / 528 / 852 / 963 Hz)
-            const float chord[4] = {432.0f, 528.0f, 852.0f, 963.0f};
-            for (int n = 0; n < 4; n++) {
-                float f = chord[n];
-                for (int blk = 0; blk < 5; blk++) {
-                    for (int i = 0; i < 128; i++) {
-                        phase0 += (6.2831853f * f) / 16000.0f;
-                        if (phase0 > 6.2831853f) phase0 -= 6.2831853f;
-                        int16_t s = (int16_t)(sinf(phase0) * 5200.0f);
-                        stereo_buf[i * 2]     = s;
-                        stereo_buf[i * 2 + 1] = s;
-                    }
-                    size_t written = 0;
-                    i2s_write(I2S_NUM_0, stereo_buf, sizeof(stereo_buf), &written, 20);
+    s3_es8311_init_i2s();
+    if (g_i2s_tts_ready) {
+        int16_t stereo_buf[256]; // 128 stereo frames (8ms @ 16kHz)
+        float phase0 = 0.0f, phase1 = 0.0f, phase2 = 0.0f;
+        // Pre-chime: {<3,<3,<3}+1 triad chord (432 / 528 / 852 / 963 Hz)
+        const float chord[4] = {432.0f, 528.0f, 852.0f, 963.0f};
+        for (int n = 0; n < 4; n++) {
+            float f = chord[n];
+            for (int blk = 0; blk < 5; blk++) {
+                for (int i = 0; i < 128; i++) {
+                    phase0 += (6.2831853f * f) / 16000.0f;
+                    if (phase0 > 6.2831853f) phase0 -= 6.2831853f;
+                    int16_t s = (int16_t)(sinf(phase0) * 5200.0f);
+                    stereo_buf[i * 2]     = s;
+                    stereo_buf[i * 2 + 1] = s;
                 }
-            }
-            // Formant synthesis over up to 48 characters
-            float f0 = (float)((carrier_hz >= 200 && carrier_hz <= 1200) ? carrier_hz : 432) * 0.35f;
-            if (trit > 0) f0 *= 1.12f;
-            else if (trit < 0) f0 *= 0.92f;
-            size_t len = strlen(text);
-            if (len > 48) len = 48;
-            for (size_t idx = 0; idx < len; idx++) {
-                char c = text[idx];
-                if (c >= 'A' && c <= 'Z') c = (char)(c + 32);
-                float f1 = 500.0f, f2 = 1500.0f, amp = 4800.0f;
-                if (c == 'a')      { f1 = 730.0f; f2 = 1090.0f; }
-                else if (c == 'e') { f1 = 530.0f; f2 = 1840.0f; }
-                else if (c == 'i') { f1 = 270.0f; f2 = 2290.0f; }
-                else if (c == 'o') { f1 = 570.0f; f2 = 840.0f;  }
-                else if (c == 'u') { f1 = 300.0f; f2 = 870.0f;  }
-                else if (c == ' ' || c == '.' || c == ',') { amp = 0.0f; }
-                else {
-                    f1 = 420.0f + (float)((uint8_t)c & 0x0F) * 24.0f;
-                    f2 = 1320.0f + (float)(((uint8_t)c >> 2) & 0x0F) * 45.0f;
-                    amp = 3200.0f;
-                }
-                for (int blk = 0; blk < 3; blk++) {
-                    for (int i = 0; i < 128; i++) {
-                        phase0 += (6.2831853f * f0) / 16000.0f;
-                        phase1 += (6.2831853f * f1) / 16000.0f;
-                        phase2 += (6.2831853f * f2) / 16000.0f;
-                        if (phase0 > 6.2831853f) phase0 -= 6.2831853f;
-                        if (phase1 > 6.2831853f) phase1 -= 6.2831853f;
-                        if (phase2 > 6.2831853f) phase2 -= 6.2831853f;
-                        float v = 0.45f * sinf(phase0) + 0.35f * sinf(phase1) + 0.20f * sinf(phase2);
-                        int16_t s = (int16_t)(v * amp);
-                        stereo_buf[i * 2]     = s;
-                        stereo_buf[i * 2 + 1] = s;
-                    }
-                    size_t written = 0;
-                    i2s_write(I2S_NUM_0, stereo_buf, sizeof(stereo_buf), &written, 20);
-                }
+                size_t written = 0;
+                i2s_write(I2S_NUM_0, stereo_buf, sizeof(stereo_buf), &written, 20);
             }
         }
-    } else {
-        // On 2.06" boards (GPIO 8/9 used by LCD_RST/TP_RST), pulse ES8311 DAC gain envelope
-        for (int k = 0; k < 4; k++) {
-            s3_i2c_write8(I2C_ADDR_ES8311, 0x32, 0xE2);
-            delay(8);
-            s3_i2c_write8(I2C_ADDR_ES8311, 0x32, 0xD9);
-            delay(6);
+        // Formant synthesis over up to 48 characters
+        float f0 = (float)((carrier_hz >= 200 && carrier_hz <= 1200) ? carrier_hz : 432) * 0.35f;
+        if (trit > 0) f0 *= 1.12f;
+        else if (trit < 0) f0 *= 0.92f;
+        size_t len = strlen(text);
+        if (len > 48) len = 48;
+        for (size_t idx = 0; idx < len; idx++) {
+            char c = text[idx];
+            if (c >= 'A' && c <= 'Z') c = (char)(c + 32);
+            float f1 = 500.0f, f2 = 1500.0f, amp = 4800.0f;
+            if (c == 'a')      { f1 = 730.0f; f2 = 1090.0f; }
+            else if (c == 'e') { f1 = 530.0f; f2 = 1840.0f; }
+            else if (c == 'i') { f1 = 270.0f; f2 = 2290.0f; }
+            else if (c == 'o') { f1 = 570.0f; f2 = 840.0f;  }
+            else if (c == 'u') { f1 = 300.0f; f2 = 870.0f;  }
+            else if (c == ' ' || c == '.' || c == ',') { amp = 0.0f; }
+            else {
+                f1 = 420.0f + (float)((uint8_t)c & 0x0F) * 24.0f;
+                f2 = 1320.0f + (float)(((uint8_t)c >> 2) & 0x0F) * 45.0f;
+                amp = 3200.0f;
+            }
+            for (int blk = 0; blk < 3; blk++) {
+                for (int i = 0; i < 128; i++) {
+                    phase0 += (6.2831853f * f0) / 16000.0f;
+                    phase1 += (6.2831853f * f1) / 16000.0f;
+                    phase2 += (6.2831853f * f2) / 16000.0f;
+                    if (phase0 > 6.2831853f) phase0 -= 6.2831853f;
+                    if (phase1 > 6.2831853f) phase1 -= 6.2831853f;
+                    if (phase2 > 6.2831853f) phase2 -= 6.2831853f;
+                    float v = 0.45f * sinf(phase0) + 0.35f * sinf(phase1) + 0.20f * sinf(phase2);
+                    int16_t s = (int16_t)(v * amp);
+                    stereo_buf[i * 2]     = s;
+                    stereo_buf[i * 2 + 1] = s;
+                }
+                size_t written = 0;
+                i2s_write(I2S_NUM_0, stereo_buf, sizeof(stereo_buf), &written, 20);
+            }
         }
     }
+    digitalWrite(PIN_SPEAKER_EN, LOW);
 }
 
 // ============================================================
@@ -351,27 +408,11 @@ static bool s3_axp2101_init() {
     }
     g_power.present = true;
 
-    s3_i2c_write8(I2C_ADDR_AXP2101, 0x22, 0b00000110);
-    s3_i2c_write8(I2C_ADDR_AXP2101, 0x27, 0x10);
-
-    // Enable DCDC1 @ 3.3V
-    s3_i2c_write8(I2C_ADDR_AXP2101, 0x80, 0x01);
-    s3_i2c_write8(I2C_ADDR_AXP2101, 0x82, (3300 - 1500) / 100);
-
-    // Set ALDO1, ALDO2, ALDO3, ALDO4 = 3.3V
-    uint8_t aldo_3v3 = (3300 - 500) / 100; // 0x1C
-    s3_i2c_write8(I2C_ADDR_AXP2101, 0x92, aldo_3v3);
-    s3_i2c_write8(I2C_ADDR_AXP2101, 0x93, aldo_3v3);
-    s3_i2c_write8(I2C_ADDR_AXP2101, 0x94, aldo_3v3);
-    s3_i2c_write8(I2C_ADDR_AXP2101, 0x95, aldo_3v3);
-
-    uint8_t ldo_en = s3_i2c_read8(I2C_ADDR_AXP2101, 0x90, 0x00);
-    s3_i2c_write8(I2C_ADDR_AXP2101, 0x90, ldo_en | 0x3F);
-
-    // Enable battery voltage & system ADC channels (0x30 = 0x03 / 0x3F)
-    s3_i2c_write8(I2C_ADDR_AXP2101, 0x30, 0x3F);
-    s3_i2c_write8(I2C_ADDR_AXP2101, 0x62, 0x08);
-    s3_i2c_write8(I2C_ADDR_AXP2101, 0x64, 0x03);
+    // Non-destructive AXP2101 init (matches oxi-phoenix/baye-rust/src/drivers/axp2101.rs):
+    // Leave factory DCDC1..5 & ALDO1..4 rails untouched so neither 1.8" nor 2.06" rails drop,
+    // and enable battery voltage ADC bit 0 on register 0x30.
+    uint8_t adc = s3_i2c_read8(I2C_ADDR_AXP2101, 0x30, 0x00);
+    s3_i2c_write8(I2C_ADDR_AXP2101, 0x30, adc | 0x01);
     return true;
 }
 
@@ -693,34 +734,32 @@ static bool s3_amoled_init() {
     }
 
     if (g_board_is_18) {
-        // Exact Waveshare ESP32-S3-Touch-AMOLED-1.8 SH8601 init sequence (from baye-rust)
+        // Exact Waveshare ESP32-S3-Touch-AMOLED-1.8 SH8601 init sequence (from baye-rust sh8601.rs)
         sh8601_write_cmd(0x01); // SWRESET
         delay(200);
         sh8601_write_cmd(0x11); // SLPOUT
         delay(120);
         sh8601_write_cmd(0x13); // NORON
         sh8601_write_cmd(0x20); // INVOFF
-        sh8601_write_cmd_data(0x3A, 0x05); // PIXFMT = RGB565
+        sh8601_write_cmd_data(0x3A, 0x05); // PIXFMT = RGB565 (SH8601 uses 0x05)
         sh8601_write_cmd(0x29); // DISPON
         sh8601_write_cmd_data(0x53, 0x28); // CTRL_DISPLAY
         sh8601_write_cmd_data(0x51, 0x58); // Soft-start brightness (34%) for USB-C hub enumeration safety
         sh8601_write_cmd_data(0x58, 0x00); // CE off
         delay(15);
     } else {
-        // Exact Waveshare ESP32-S3-Touch-AMOLED-2.06 SH8601/CO5300 init sequence
-        sh8601_write_cmd_data(0x36, 0x00);
-        sh8601_write_cmd_data(0x3A, 0x55);
-        sh8601_write_cmd(0x11);
+        // Exact Waveshare ESP32-S3-Touch-AMOLED-2.06 CO5300 init sequence (from baye-rust sh8601.rs)
+        sh8601_write_cmd_data(0x36, 0x00); // MADCTL
+        sh8601_write_cmd_data(0x3A, 0x55); // PIXFMT = RGB565 (CO5300 uses 0x55)
+        sh8601_write_cmd(0x11);            // SLPOUT
         delay(120);
-        sh8601_write_cmd_data(0xC4, 0x80);
-        const uint8_t te_line[2] = {0x01, 0xD1};
-        sh8601_write_cmd_bytes(0x44, te_line, 2);
-        sh8601_write_cmd_data(0x35, 0x00);
-        sh8601_write_cmd_data(0x53, 0x20);
+        sh8601_write_cmd_data(0xC4, 0x80); // CO5300 SPI Mode Control: enable Quad-SPI (QIO) pixel path
+        sh8601_write_cmd_data(0x35, 0x00); // TEON
+        sh8601_write_cmd_data(0x53, 0x20); // WRCTRLD
         delay(10);
-        sh8601_write_cmd_data(0x63, 0xFF);
+        sh8601_write_cmd_data(0x63, 0xFF); // WRHBMD (CO5300 HBM brightness)
         delay(10);
-        sh8601_write_cmd(0x29);
+        sh8601_write_cmd(0x29);            // DISPON
         delay(20);
         sh8601_write_cmd_data(0x51, 0x58); // Soft-start brightness (34%) for USB-C hub enumeration safety
     }
@@ -730,43 +769,25 @@ static bool s3_amoled_init() {
 
 static void s3_amoled_begin_frame() {
     if (!s_amoled_spi || !s_band_buf) return;
-    if (g_board_is_18) {
-        uint16_t x0 = g_lcd_x_gap;
-        uint16_t x1 = g_lcd_x_gap + g_lcd_w - 1;
-        uint16_t y0 = 0;
-        uint16_t y1 = g_lcd_h - 1;
-        sh8601_write_cmd_data32(0x2A, x0, x1);
-        sh8601_write_cmd_data32(0x2B, y0, y1);
-        sh8601_write_cmd(0x2C); // RAMWR
-        s_first_chunk = true;
-    }
+    // Both 1.8" SH8601 (x_gap=0) and 2.06" CO5300 (x_gap=22) set full-frame CASET/PASET/RAMWR
+    // before streaming 1024-pixel QSPI chunks (matches baye-rust/src/drivers/sh8601.rs::set_addr_window)
+    uint16_t x0 = g_lcd_x_gap;
+    uint16_t x1 = g_lcd_x_gap + g_lcd_w - 1;
+    uint16_t y0 = 0;
+    uint16_t y1 = g_lcd_h - 1;
+    sh8601_write_cmd_data32(0x2A, x0, x1);
+    sh8601_write_cmd_data32(0x2B, y0, y1);
+    sh8601_write_cmd(0x2C); // RAMWR
+    s_first_chunk = true;
 }
 
 static void s3_amoled_push_band(int y0, int h) {
+    (void)y0;
     if (!s_amoled_spi || !s_band_buf || h <= 0) return;
 
-    if (!g_board_is_18) {
-        // 2.06" CO5300 per-band window + 0x32 / 0x002C00 QIO write
-        uint16_t x0 = g_lcd_x_gap;
-        uint16_t x1 = g_lcd_x_gap + g_lcd_w - 1;
-        uint16_t y1 = (uint16_t)(y0 + h - 1);
-        sh8601_write_cmd_data32(0x2A, x0, x1);
-        sh8601_write_cmd_data32(0x2B, (uint16_t)y0, y1);
-
-        sh8601_cs_low();
-        spi_transaction_ext_t tran;
-        memset(&tran, 0, sizeof(tran));
-        tran.base.flags     = SPI_TRANS_MODE_QIO;
-        tran.base.cmd       = 0x32;
-        tran.base.addr      = 0x002C00;
-        tran.base.tx_buffer = s_band_buf;
-        tran.base.length    = (size_t)g_lcd_w * (size_t)h * 16;
-        spi_device_polling_transmit(s_amoled_spi, &tran.base);
-        sh8601_cs_high();
-        return;
-    }
-
-    // 1.8" SH8601 1024-pixel chunked QSPI DMA streaming (baye-rust sh8601.rs)
+    // 1024-pixel chunked QSPI DMA streaming (exact baye-rust sh8601.rs parity for both SH8601 & CO5300):
+    // First chunk of frame sends 0x32 QIO write with addr 0x003C00 (1.8" SH8601) or 0x002C00 (2.06" CO5300);
+    // subsequent chunks stream raw 4-line QIO pixel data while CS stays low.
     size_t total_pixels = (size_t)g_lcd_w * (size_t)h;
     size_t offset = 0;
 
@@ -783,7 +804,7 @@ static void s3_amoled_push_band(int y0, int h) {
         if (s_first_chunk) {
             tran.base.flags = SPI_TRANS_MODE_QIO;
             tran.base.cmd   = 0x32;
-            tran.base.addr  = 0x003C00; // RAMWRC (Memory Write Continue)
+            tran.base.addr  = g_board_is_18 ? 0x003C00 : 0x002C00;
             s_first_chunk   = false;
         } else {
             tran.base.flags   = SPI_TRANS_MODE_QIO |
@@ -803,9 +824,7 @@ static void s3_amoled_push_band(int y0, int h) {
 }
 
 static void s3_amoled_end_frame() {
-    if (g_board_is_18) {
-        sh8601_cs_high();
-    }
+    sh8601_cs_high();
 }
 
 // ============================================================
