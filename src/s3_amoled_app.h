@@ -40,6 +40,7 @@
 extern "C" {
   void rust_reduce_rational_pq(int32_t num, int32_t den, int32_t *out_p, int32_t *out_q);
   size_t rust_parse_80211_probe_ie(const uint8_t *payload, size_t len, uint8_t fsub, uint8_t *out_ssid33, uint32_t *out_vendor_oui, uint8_t *out_phy_caps);
+  uint8_t rust_fingerprint_80211_probe(const uint8_t *payload, size_t len, int8_t rssi, uint32_t *out_sig_hash, uint16_t *out_unique_sigs, uint32_t *out_total_rotations, uint16_t *out_sig_rotations);
 }
 static volatile int g_s3_sun_ch = S3_MESH_CHANNEL;
 static char g_s3_last_probed_ssid[33] = "NONE";
@@ -47,6 +48,10 @@ static uint8_t g_s3_last_probed_mac[6] = {0};
 static volatile uint32_t g_s3_last_probed_oui = 0;
 static volatile uint8_t g_s3_last_probed_caps = 0;
 static volatile uint32_t g_s3_directed_probes = 0;
+static volatile uint32_t g_s3_last_sig_hash = 0;
+static volatile uint16_t g_s3_unique_sigs = 0;
+static volatile uint32_t g_s3_mac_rotations = 0;
+static volatile uint16_t g_s3_last_sig_rotations = 0;
 #define S3_MAX_PROBED_TARGETS 6
 static char g_s3_probed_targets[S3_MAX_PROBED_TARGETS][33] = {{0}};
 static uint8_t g_s3_probed_targets_cnt = 0;
@@ -691,14 +696,25 @@ static void IRAM_ATTR s3_wifi_promisc_cb(void* buf, wifi_promiscuous_pkt_type_t 
             }
         }
 
-        // 1B. Extract Directed Probe Request SSID + Vendor OUI + PHY Caps via #![no_std] Rust (fsub == 4, offset 24)
+        // 1B. Extract Directed Probe Request SSID + Vendor OUI + PHY Caps + MAC-Independent IE Genome Signature via #![no_std] Rust (fsub == 4, offset 24)
         if (ftype == 0 && fsub == 4 && len > sizeof(S3WifiMacHdr) + 2) {
             uint8_t p_ssid[33];
             uint32_t v_oui = 0;
             uint8_t p_caps = 0;
             size_t slen = rust_parse_80211_probe_ie(payload, len, 4, p_ssid, &v_oui, &p_caps);
+            uint32_t sig_h = 0;
+            uint16_t uniq_s = 0;
+            uint32_t tot_rot = 0;
+            uint16_t sig_rot = 0;
+            uint8_t fp_caps = rust_fingerprint_80211_probe(payload, len, rssi, &sig_h, &uniq_s, &tot_rot, &sig_rot);
+            if (sig_h != 0) {
+                g_s3_last_sig_hash = sig_h;
+                g_s3_unique_sigs = uniq_s;
+                g_s3_mac_rotations = tot_rot;
+                g_s3_last_sig_rotations = sig_rot;
+            }
             if (v_oui != 0) g_s3_last_probed_oui = v_oui;
-            if (p_caps != 0) g_s3_last_probed_caps = p_caps;
+            if ((p_caps | fp_caps) != 0) g_s3_last_probed_caps = (p_caps | fp_caps);
             memcpy((void*)g_s3_last_probed_mac, hdr->addr2, 6);
             if (slen > 0) {
                 g_s3_directed_probes++;
@@ -1223,9 +1239,10 @@ static void s3_render_tab_zen(S3Canvas& c) {
     c.draw_text_centered(cx, hud_y + 7, hud1, COL_MINT, 1);
 
     char hud2[64];
-    snprintf(hud2, sizeof(hud2), "PRB:%.14s OUI:%06lX D:%lu",
-             g_s3_last_probed_ssid,
-             (unsigned long)g_s3_last_probed_oui,
+    snprintf(hud2, sizeof(hud2), "SIG:%08lX U:%u ROT:%lu D:%lu",
+             (unsigned long)g_s3_last_sig_hash,
+             (unsigned)g_s3_unique_sigs,
+             (unsigned long)g_s3_mac_rotations,
              (unsigned long)g_s3_directed_probes);
     c.draw_text_centered(cx, hud_y + 21, hud2, COL_GOLD, 1);
 }
@@ -1943,6 +1960,7 @@ static void s3_emit_status_json() {
                   "\"wupz_fold\":\"0x%016llx\",\"quantum_pos_u64\":\"0x%016llx\",\"quantum_neg_u64\":\"0x%016llx\","
                   "\"kompress_b158\":\"%s\",\"kompress_ratio_pq\":\"%ld/%ld\","
                   "\"splashes\":%lu,\"peer_rx\":%lu,\"probe_reqs\":%lu,\"directed_probes\":%lu,"
+                  "\"unique_sigs\":%u,\"mac_rotations\":%lu,\"last_sig_hash\":\"0x%08lx\",\"last_sig_rotations\":%u,"
                   "\"last_probed_ssid\":\"%s\",\"probed_targets\":\"%s\","
                   "\"last_probed_mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\","
                   "\"last_probed_oui\":\"0x%06lx\",\"last_probed_caps\":%u,"
@@ -1971,6 +1989,8 @@ static void s3_emit_status_json() {
                   g_kompress_hex, (long)krP, (long)krQ,
                   (unsigned long)g_wp_splashes, (unsigned long)g_s3_peer_rx_cnt,
                   (unsigned long)g_s3_probe_pkts, (unsigned long)g_s3_directed_probes,
+                  (unsigned)g_s3_unique_sigs, (unsigned long)g_s3_mac_rotations,
+                  (unsigned long)g_s3_last_sig_hash, (unsigned)g_s3_last_sig_rotations,
                   g_s3_last_probed_ssid, targets_buf,
                   g_s3_last_probed_mac[0], g_s3_last_probed_mac[1], g_s3_last_probed_mac[2],
                   g_s3_last_probed_mac[3], g_s3_last_probed_mac[4], g_s3_last_probed_mac[5],
