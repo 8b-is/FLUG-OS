@@ -1205,9 +1205,11 @@ static void s3_render_tab_zen(S3Canvas& c) {
 
     // 5. Top & Bottom Impermanence + MarineSense HUD Pills
     const S3FavTrack* trk = &S3_FAVOURITES[g_s3_track_idx];
+    int32_t visP = 0, visQ = 1;
+    rust_reduce_rational_pq((int32_t)(g_ms_viscosity * 100.0f), 100, &visP, &visQ);
     char top_lbl[56];
-    snprintf(top_lbl, sizeof(top_lbl), "%s // eta:%.2f rec:%lu",
-             trk->title, g_ms_viscosity, (unsigned long)g_ms_ecphoric_recalls);
+    snprintf(top_lbl, sizeof(top_lbl), "%s // eta:%ld/%ld rec:%lu",
+             trk->title, (long)visP, (long)visQ, (unsigned long)g_ms_ecphoric_recalls);
     top_lbl[38] = '\0';
     c.draw_text_centered(cx, 45, top_lbl, COL_MINT, 1);
 
@@ -1221,9 +1223,10 @@ static void s3_render_tab_zen(S3Canvas& c) {
     c.draw_text_centered(cx, hud_y + 7, hud1, COL_MINT, 1);
 
     char hud2[64];
-    snprintf(hud2, sizeof(hud2), "ANICCA DAMP:%u/256  S:%u%% J:%u  RX:%lu",
-             g_wp_damping, g_ms_mean_salience, g_ms_mean_jitter,
-             (unsigned long)g_s3_peer_rx_cnt);
+    snprintf(hud2, sizeof(hud2), "PRB:%.14s OUI:%06lX D:%lu",
+             g_s3_last_probed_ssid,
+             (unsigned long)g_s3_last_probed_oui,
+             (unsigned long)g_s3_directed_probes);
     c.draw_text_centered(cx, hud_y + 21, hud2, COL_GOLD, 1);
 }
 
