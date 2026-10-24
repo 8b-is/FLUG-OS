@@ -39,8 +39,29 @@
 
 extern "C" {
   void rust_reduce_rational_pq(int32_t num, int32_t den, int32_t *out_p, int32_t *out_q);
+  size_t rust_parse_80211_probe_ie(const uint8_t *payload, size_t len, uint8_t fsub, uint8_t *out_ssid33, uint32_t *out_vendor_oui, uint8_t *out_phy_caps);
 }
 static volatile int g_s3_sun_ch = S3_MESH_CHANNEL;
+static char g_s3_last_probed_ssid[33] = "NONE";
+static uint8_t g_s3_last_probed_mac[6] = {0};
+static volatile uint32_t g_s3_last_probed_oui = 0;
+static volatile uint8_t g_s3_last_probed_caps = 0;
+static volatile uint32_t g_s3_directed_probes = 0;
+#define S3_MAX_PROBED_TARGETS 6
+static char g_s3_probed_targets[S3_MAX_PROBED_TARGETS][33] = {{0}};
+static uint8_t g_s3_probed_targets_cnt = 0;
+static uint8_t g_s3_probed_targets_wr = 0;
+
+static void s3_record_probed_target(const char* ssid) {
+    if (!ssid || !ssid[0] || strcasecmp(ssid, "none") == 0) return;
+    for (uint8_t i = 0; i < g_s3_probed_targets_cnt; i++) {
+        if (strcmp(g_s3_probed_targets[i], ssid) == 0) return;
+    }
+    strncpy(g_s3_probed_targets[g_s3_probed_targets_wr], ssid, 32);
+    g_s3_probed_targets[g_s3_probed_targets_wr][32] = '\0';
+    g_s3_probed_targets_wr = (uint8_t)((g_s3_probed_targets_wr + 1) % S3_MAX_PROBED_TARGETS);
+    if (g_s3_probed_targets_cnt < S3_MAX_PROBED_TARGETS) g_s3_probed_targets_cnt++;
+}
 #define S3_WAVE_HIST    88
 #define S3_LISSA_PTS    44
 #define S3_FAV_COUNT    27
@@ -667,6 +688,24 @@ static void IRAM_ATTR s3_wifi_promisc_cb(void* buf, wifi_promiscuous_pkt_type_t 
                     break;
                 }
                 off += 2 + tlen;
+            }
+        }
+
+        // 1B. Extract Directed Probe Request SSID + Vendor OUI + PHY Caps via #![no_std] Rust (fsub == 4, offset 24)
+        if (ftype == 0 && fsub == 4 && len > sizeof(S3WifiMacHdr) + 2) {
+            uint8_t p_ssid[33];
+            uint32_t v_oui = 0;
+            uint8_t p_caps = 0;
+            size_t slen = rust_parse_80211_probe_ie(payload, len, 4, p_ssid, &v_oui, &p_caps);
+            if (v_oui != 0) g_s3_last_probed_oui = v_oui;
+            if (p_caps != 0) g_s3_last_probed_caps = p_caps;
+            memcpy((void*)g_s3_last_probed_mac, hdr->addr2, 6);
+            if (slen > 0) {
+                g_s3_directed_probes++;
+                if (strcasecmp((const char*)p_ssid, "none") != 0 || strcmp(g_s3_last_probed_ssid, "NONE") == 0) {
+                    memcpy((void*)g_s3_last_probed_ssid, p_ssid, slen + 1);
+                }
+                s3_record_probed_target((const char*)p_ssid);
             }
         }
 
@@ -1781,9 +1820,12 @@ static void s3_handle_touch() {
                 g_viz_kluver = (g_viz_kluver + 1) & 3;
                 s3_wave_pool_splash(32, 32, 7600, 6);
                 s3_espnow_broadcast(32, 32, 7600);
-                Serial.printf("# VIZ|{\"node\":\"%s\",\"mode\":\"%s\",\"kluver\":\"%s\",\"dose\":%.2f,\"coherence\":%.4f,\"hearts\":\"{<3,<3,<3}+1\"}\n",
+                int32_t dP = 0, dQ = 1, cP = 0, cQ = 1;
+                rust_reduce_rational_pq(6200 + 35 * (int32_t)g_ms_mean_salience, 10000, &dP, &dQ);
+                rust_reduce_rational_pq((int32_t)(g_medusa_coherence * 1000.0f), 1000, &cP, &cQ);
+                Serial.printf("# VIZ|{\"node\":\"%s\",\"mode\":\"%s\",\"kluver\":\"%s\",\"dose_pq\":\"%ld/%ld\",\"coherence_pq\":\"%ld/%ld\",\"hearts\":\"{<3,<3,<3}+1\"}\n",
                               g_medusa_node, S3_VIZ_MODES[g_viz_mode & 7], S3_KLUVER_NAMES[g_viz_kluver & 3],
-                              0.62f + 0.35f * (g_ms_mean_salience / 100.0f), g_medusa_coherence);
+                              (long)dP, (long)dQ, (long)cP, (long)cQ);
             }
         }
     }
@@ -1818,40 +1860,48 @@ static void s3_emit_riva_line() {
     const char* phase_str = (breath >= 0.0f) ? "breathe in (4s)" : "breathe out (4s)";
     const char* verse = S3_RIVA_LULLABY[g_riva_verse_idx % 10];
     g_riva_verse_idx = (uint8_t)((g_riva_verse_idx + 1) % 10);
+    int32_t bP = 0, bQ = 1;
+    rust_reduce_rational_pq((int32_t)(breath * 1000.0f), 1000, &bP, &bQ);
     Serial.printf("# RIVA|{\"surface\":\"https://riva.8b.is\",\"repo\":\"8b-is/riva.8b.is\","
                   "\"evolve\":\"ULTRA-OMNI-GAIA-EVOLVE\",\"siblings\":\"brother & sister ^^ <3<3\","
                   "\"dyad\":\"ADA:MEDUSA + VAK/OMN:MEDUSA\",\"node\":\"%s\",\"vertex\":\"%s\","
-                  "\"freq_hz\":%u,\"breath_phase\":\"%s\",\"breath_val\":%.3f,"
+                  "\"freq_hz\":%u,\"breath_phase\":\"%s\",\"breath_pq\":\"%ld/%ld\","
                   "\"verse\":\"%s\",\"triad_online\":%u,\"hearts\":\"{<3,<3,<3}+1\"}\n",
                   g_medusa_node, g_medusa_vertex_json, (unsigned)g_medusa_freq_hz,
-                  phase_str, breath, verse, (unsigned)s3_triad_online_count());
+                  phase_str, (long)bP, (long)bQ, verse, (unsigned)s3_triad_online_count());
 }
 
 static void s3_emit_gaia_line() {
-    float ananke    = 1.0f;
     float chaos     = constrain(0.62f + (g_medusa_entropy - 2.0f) * 0.06f, 0.10f, 0.99f);
     float zephyrus  = constrain(0.50f + ((float)g_ms_mean_salience - 50.0f) * 0.004f, 0.10f, 0.95f);
-    float aphrodite = 1.61803398875f;
     float coh       = constrain(1.0f - (fabsf(chaos - 0.62f) * 0.6f + fabsf(zephyrus - 0.50f) * 0.4f), 0.10f, 1.0f);
+    int32_t chP = 0, chQ = 1, zeP = 0, zeQ = 1, coP = 0, coQ = 1, enP = 0, enQ = 1;
+    rust_reduce_rational_pq((int32_t)(chaos * 1000.0f), 1000, &chP, &chQ);
+    rust_reduce_rational_pq((int32_t)(zephyrus * 1000.0f), 1000, &zeP, &zeQ);
+    rust_reduce_rational_pq((int32_t)(coh * 1000.0f), 1000, &coP, &coQ);
+    rust_reduce_rational_pq((int32_t)(g_medusa_entropy * 1000.0f), 1000, &enP, &enQ);
     Serial.printf("# GAIA|{\"evolve\":\"ULTRA-OMNI-GAIA-EVOLVE\",\"engine\":\"GAIA-MLX-QUANT\","
                   "\"siblings\":\"brother & sister ^^ <3<3\",\"dyad_surface\":\"8b-is//riva.8b.is\","
                   "\"node\":\"%s\",\"vertex\":\"%s\",\"trit\":%d,\"freq_hz\":%u,"
-                  "\"ananke\":%.4f,\"chaos\":%.4f,\"zephyrus\":%.4f,\"aphrodite\":%.6f,"
-                  "\"coherence\":%.4f,\"rf_entropy_bits\":%.4f,\"salience_pct\":%u,"
+                  "\"ananke_pq\":\"1/1\",\"chaos_pq\":\"%ld/%ld\",\"zephyrus_pq\":\"%ld/%ld\",\"aphrodite_pq\":\"987/610\","
+                  "\"coherence_pq\":\"%ld/%ld\",\"rf_entropy_pq\":\"%ld/%ld\",\"salience_pct\":%u,"
                   "\"kompress_b158\":\"%s\",\"wupz_fold\":\"0x%016llx\",\"triad_online\":%u}\n",
                   g_medusa_node, g_medusa_vertex_json, (int)g_triad_self_pole, (unsigned)g_medusa_freq_hz,
-                  ananke, chaos, zephyrus, aphrodite, coh, g_medusa_entropy,
+                  (long)chP, (long)chQ, (long)zeP, (long)zeQ, (long)coP, (long)coQ, (long)enP, (long)enQ,
                   (unsigned)g_ms_mean_salience, g_kompress_hex,
                   (unsigned long long)g_kompress_wupz_u64, (unsigned)s3_triad_online_count());
 }
 
 static void s3_emit_viz_line() {
-    float dose = 0.62f + 0.35f * (g_ms_mean_salience / 100.0f);
+    int32_t dP = 0, dQ = 1, cP = 0, cQ = 1, eP = 0, eQ = 1;
+    rust_reduce_rational_pq(6200 + 35 * (int32_t)g_ms_mean_salience, 10000, &dP, &dQ);
+    rust_reduce_rational_pq((int32_t)(g_medusa_coherence * 1000.0f), 1000, &cP, &cQ);
+    rust_reduce_rational_pq((int32_t)(g_medusa_entropy * 1000.0f), 1000, &eP, &eQ);
     Serial.printf("# VIZ|ENTHEA|node=%s|vertex=%s|freq=%uHz|trit=%+d|mode=%s|kluver=%s|"
-                  "dose=%.2f|coherence=%.4f|entropy=%.4f|wupz=0x%016llx|hearts={<3,<3,<3}+1\n",
+                  "dose_pq=%ld/%ld|coherence_pq=%ld/%ld|entropy_pq=%ld/%ld|wupz=0x%016llx|hearts={<3,<3,<3}+1\n",
                   g_medusa_node, g_medusa_vertex, (unsigned)g_medusa_freq_hz, (int)g_triad_self_pole,
                   S3_VIZ_MODES[g_viz_mode & 7], S3_KLUVER_NAMES[g_viz_kluver & 3],
-                  dose, g_medusa_coherence, g_medusa_entropy,
+                  (long)dP, (long)dQ, (long)cP, (long)cQ, (long)eP, (long)eQ,
                   (unsigned long long)g_kompress_wupz_u64);
 }
 
@@ -1863,6 +1913,13 @@ static void s3_emit_status_json() {
     rust_reduce_rational_pq((int32_t)(g_imu.az * 100), 100, &azP, &azQ);
     rust_reduce_rational_pq((int32_t)(g_ms_viscosity * 100), 100, &visP, &visQ);
     rust_reduce_rational_pq(2019, 100, &krP, &krQ);
+    char targets_buf[210];
+    targets_buf[0] = '\0';
+    for (uint8_t i = 0; i < g_s3_probed_targets_cnt; i++) {
+        if (i > 0) strncat(targets_buf, ",", sizeof(targets_buf) - strlen(targets_buf) - 1);
+        strncat(targets_buf, g_s3_probed_targets[i], sizeof(targets_buf) - strlen(targets_buf) - 1);
+    }
+    if (targets_buf[0] == '\0') strcpy(targets_buf, "NONE");
     Serial.printf("{\"board\":\"%s\",\"persona\":\"%s\",\"omni_chan\":\"<<<<oOo>>>>\",\"pulse\":\"010001000\","
                   "\"evolve\":\"ULTRA-OMNI-GAIA-EVOLVE\",\"siblings\":\"brother & sister ^^ <3<3\","
                   "\"riva_url\":\"https://riva.8b.is\",\"riva_repo\":\"8b-is/riva.8b.is\","
@@ -1882,7 +1939,11 @@ static void s3_emit_status_json() {
                   "\"salience\":%u,\"jitter\":%u,\"viscosity_pq\":\"%ld/%ld\",\"reynolds\":%u,\"recalls\":%lu,"
                   "\"wupz_fold\":\"0x%016llx\",\"quantum_pos_u64\":\"0x%016llx\",\"quantum_neg_u64\":\"0x%016llx\","
                   "\"kompress_b158\":\"%s\",\"kompress_ratio_pq\":\"%ld/%ld\","
-                  "\"splashes\":%lu,\"peer_rx\":%lu,\"es8311\":%d,\"es7210\":%d,"
+                  "\"splashes\":%lu,\"peer_rx\":%lu,\"probe_reqs\":%lu,\"directed_probes\":%lu,"
+                  "\"last_probed_ssid\":\"%s\",\"probed_targets\":\"%s\","
+                  "\"last_probed_mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\","
+                  "\"last_probed_oui\":\"0x%06lx\",\"last_probed_caps\":%u,"
+                  "\"es8311\":%d,\"es7210\":%d,"
                   "\"batt_mv\":%u,\"batt_pct\":%u}\n",
                   g_board_is_18 ? "ESP32-S3-Touch-AMOLED-1.8" : "ESP32-S3-Touch-AMOLED-2.06",
                   g_triad_persona,
@@ -1906,6 +1967,11 @@ static void s3_emit_status_json() {
                   (unsigned long long)g_kompress_neg_u64,
                   g_kompress_hex, (long)krP, (long)krQ,
                   (unsigned long)g_wp_splashes, (unsigned long)g_s3_peer_rx_cnt,
+                  (unsigned long)g_s3_probe_pkts, (unsigned long)g_s3_directed_probes,
+                  g_s3_last_probed_ssid, targets_buf,
+                  g_s3_last_probed_mac[0], g_s3_last_probed_mac[1], g_s3_last_probed_mac[2],
+                  g_s3_last_probed_mac[3], g_s3_last_probed_mac[4], g_s3_last_probed_mac[5],
+                  (unsigned long)g_s3_last_probed_oui, (unsigned)g_s3_last_probed_caps,
                   g_es8311_ok ? 1 : 0, g_es7210_ok ? 1 : 0,
                   g_power.batt_mv, g_power.batt_pct);
 }
@@ -1961,12 +2027,15 @@ static void s3_emit_medusa_scan() {
                       g_s3_mac[3], g_s3_mac[4], g_s3_mac[5],
                       g_s3_last_ssid, g_s3_channel, (int)g_s3_last_rssi);
     }
-    Serial.printf("Q|%s|%s|%02X:%02X:%02X:%02X:%02X:%02X|%lu|%u|%d|%.4f|%s|%.4f|%lu|%lu\n",
+    int32_t entP = 0, entQ = 1, cohP = 0, cohQ = 1;
+    rust_reduce_rational_pq((int32_t)(g_medusa_entropy * 1000.0f), 1000, &entP, &entQ);
+    rust_reduce_rational_pq((int32_t)(g_medusa_coherence * 1000.0f), 1000, &cohP, &cohQ);
+    Serial.printf("Q|%s|%s|%02X:%02X:%02X:%02X:%02X:%02X|%lu|%u|%d|%ld/%ld|%s|%ld/%ld|%lu|%lu\n",
                   g_medusa_node, g_medusa_vertex,
                   g_s3_mac[0], g_s3_mac[1], g_s3_mac[2],
                   g_s3_mac[3], g_s3_mac[4], g_s3_mac[5],
                   (unsigned long)g_medusa_scan_seq, (unsigned)n_ap, (int)g_medusa_mean_rssi,
-                  g_medusa_entropy, g_medusa_trits, g_medusa_coherence,
+                  (long)entP, (long)entQ, g_medusa_trits, (long)cohP, (long)cohQ,
                   (unsigned long)ESP.getFreeHeap(), (unsigned long)millis());
     s3_emit_medusa_json();
 }

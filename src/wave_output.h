@@ -26,6 +26,10 @@
 
 #include <Arduino.h>
 
+extern "C" {
+  void rust_reduce_rational_pq(int32_t num, int32_t den, int32_t *out_p, int32_t *out_q);
+}
+
 #define DENSITY_WINDOW   100
 #define RSSI_FLOOR      -100
 #define RSSI_CEIL        -20
@@ -111,11 +115,21 @@ static void output_wave(int8_t rssi, int type, int subtype, unsigned long ts) {
     float kernel_val = sine_kernel(rssi_norm * 3.0f);
     int8_t domain = threshold_domain(density);
 
+    int32_t rP = 0, rQ = 1, dP = 0, dQ = 1, kP = 0, kQ = 1, fP = 0, fQ = 1;
+    int32_t r_num = (int32_t)rssi - RSSI_FLOOR;
+    if (r_num < 0) r_num = 0;
+    if (r_num > (RSSI_CEIL - RSSI_FLOOR)) r_num = (RSSI_CEIL - RSSI_FLOOR);
+    rust_reduce_rational_pq(r_num, RSSI_CEIL - RSSI_FLOOR, &rP, &rQ);
+    int32_t d_num = (packet_count > DENSITY_WINDOW) ? DENSITY_WINDOW : (int32_t)packet_count;
+    rust_reduce_rational_pq(d_num, DENSITY_WINDOW, &dP, &dQ);
+    rust_reduce_rational_pq((int32_t)(kernel_val * 1000.0f), 1000, &kP, &kQ);
+    rust_reduce_rational_pq((int32_t)(freq * 100.0f), 100, &fP, &fQ);
+
     switch (wave_mode) {
         case MODE_RAW:
-            // RSSI  density  frame_type  threshold_domain  sine_kernel
-            Serial.printf("~ %.3f %.3f %d %d %.4f\n",
-                          rssi_norm, density, type, domain, kernel_val);
+            // RSSI_pq  density_pq  frame_type  threshold_domain  sine_kernel_pq
+            Serial.printf("~ %ld/%ld %ld/%ld %d %d %ld/%ld\n",
+                          (long)rP, (long)rQ, (long)dP, (long)dQ, type, domain, (long)kP, (long)kQ);
             break;
 
         case MODE_WAVE:
@@ -124,19 +138,23 @@ static void output_wave(int8_t rssi, int type, int subtype, unsigned long ts) {
                 float phase = (float)(type * 100 + subtype * 10);
                 // wave = sine envelope × carrier, domain = threshold tag, K = kernel value
                 float wave = sinf(2.0f * (float)PI * (freq / 440.0f) * t + phase) * kernel_val;
-                Serial.printf("~ %.4f %d %.4f\n", wave, domain, kernel_val);
+                int32_t wP = 0, wQ = 1;
+                rust_reduce_rational_pq((int32_t)(wave * 1000.0f), 1000, &wP, &wQ);
+                Serial.printf("~ %ld/%ld %d %ld/%ld\n", (long)wP, (long)wQ, domain, (long)kP, (long)kQ);
             }
             break;
 
         case MODE_JSON:
             Serial.printf(
-                "~ {\"rssi\":%.3f,\"density\":%.3f,\"freq\":%.2f,"
+                "~ {\"rssi_pq\":\"%ld/%ld\",\"density_pq\":\"%ld/%ld\",\"freq_pq\":\"%ld/%ld\","
                 "\"type\":%d,\"subtype\":%d,"
                 "\"domain\":%d,"
-                "\"kernel\":%.4f,"
+                "\"kernel_pq\":\"%ld/%ld\","
                 "\"ts\":%lu}\n",
-                rssi_norm, density, freq, type, subtype,
-                domain, kernel_val, ts);
+                (long)rP, (long)rQ, (long)dP, (long)dQ, (long)fP, (long)fQ,
+                type, subtype,
+                domain,
+                (long)kP, (long)kQ, ts);
             break;
     }
 }
