@@ -36,6 +36,11 @@
 
 #define S3_MAX_CHANNEL  13
 #define S3_MESH_CHANNEL 6
+
+extern "C" {
+  void rust_reduce_rational_pq(int32_t num, int32_t den, int32_t *out_p, int32_t *out_q);
+}
+static volatile int g_s3_sun_ch = S3_MESH_CHANNEL;
 #define S3_WAVE_HIST    88
 #define S3_LISSA_PTS    44
 #define S3_FAV_COUNT    27
@@ -480,6 +485,19 @@ static void s3_espnow_recv_cb(const uint8_t* mac_addr, const uint8_t* data, int 
         return;
     }
     uint8_t nid = pkt->node_id;
+    // Accept nid == 3 as SUN:TDECK (the Heliocentric T-Deck Sun node!)
+    if (nid == 3) {
+        g_s3_peer_rx_cnt++;
+        g_s3_sun_ch = g_s3_channel;
+        for (int k = 0; k < 3; k++) {
+            g_triad_nodes[k].online = true;
+            g_triad_nodes[k].ttl_q8 = 255;
+        }
+        if (pkt->splash_amp != 0) {
+            s3_wave_pool_splash(pkt->splash_x & 63, pkt->splash_y & 63, pkt->splash_amp, 6);
+        }
+        return;
+    }
     if (nid > 2 || nid == g_triad_self_id) return;
 
     g_s3_peer_rx_cnt++;
@@ -525,8 +543,9 @@ static void s3_espnow_broadcast(uint8_t sx, uint8_t sy, int16_t amp) {
 
     static const uint8_t bcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
     int prev_ch = g_s3_channel;
-    if (prev_ch != S3_MESH_CHANNEL) {
-        esp_wifi_set_channel(S3_MESH_CHANNEL, WIFI_SECOND_CHAN_NONE);
+    if (prev_ch != (int)g_s3_sun_ch) {
+        esp_wifi_set_channel((int)g_s3_sun_ch, WIFI_SECOND_CHAN_NONE);
+        g_s3_channel = (int)g_s3_sun_ch;
     }
     esp_now_send(bcast, (const uint8_t*)&pkt, sizeof(pkt));
 }
@@ -563,8 +582,8 @@ static void s3_espnow_wake_siblings(uint8_t sx, uint8_t sy, int16_t amp) {
         delay(2);
         esp_now_send(bcast, (const uint8_t*)&pkt, sizeof(pkt));
     }
-    esp_wifi_set_channel(S3_MESH_CHANNEL, WIFI_SECOND_CHAN_NONE);
-    g_s3_channel = S3_MESH_CHANNEL;
+    esp_wifi_set_channel((int)g_s3_sun_ch, WIFI_SECOND_CHAN_NONE);
+    g_s3_channel = (int)g_s3_sun_ch;
 }
 
 // ============================================================
@@ -614,6 +633,9 @@ static void IRAM_ATTR s3_wifi_promisc_cb(void* buf, wifi_promiscuous_pkt_type_t 
                     if (printable) {
                         memcpy((void*)g_s3_last_ssid, &payload[off + 2], tlen);
                         g_s3_last_ssid[tlen] = '\0';
+                        if (strcmp(g_s3_last_ssid, "GlobalWiFi_kdq") == 0) {
+                            g_s3_sun_ch = ch;
+                        }
 
                         // Record in MEDUSA passive beacon table for SCAN / WebSerial
                         int slot = -1;
@@ -1835,6 +1857,12 @@ static void s3_emit_viz_line() {
 
 static void s3_emit_status_json() {
     const S3FavTrack* t = &S3_FAVOURITES[g_s3_track_idx];
+    int32_t axP = 0, axQ = 1, ayP = 0, ayQ = 1, azP = 0, azQ = 1, visP = 0, visQ = 1, krP = 2019, krQ = 100;
+    rust_reduce_rational_pq((int32_t)(g_imu.ax * 100), 100, &axP, &axQ);
+    rust_reduce_rational_pq((int32_t)(g_imu.ay * 100), 100, &ayP, &ayQ);
+    rust_reduce_rational_pq((int32_t)(g_imu.az * 100), 100, &azP, &azQ);
+    rust_reduce_rational_pq((int32_t)(g_ms_viscosity * 100), 100, &visP, &visQ);
+    rust_reduce_rational_pq(2019, 100, &krP, &krQ);
     Serial.printf("{\"board\":\"%s\",\"persona\":\"%s\",\"omni_chan\":\"<<<<oOo>>>>\",\"pulse\":\"010001000\","
                   "\"evolve\":\"ULTRA-OMNI-GAIA-EVOLVE\",\"siblings\":\"brother & sister ^^ <3<3\","
                   "\"riva_url\":\"https://riva.8b.is\",\"riva_repo\":\"8b-is/riva.8b.is\","
@@ -1848,12 +1876,12 @@ static void s3_emit_status_json() {
                   "\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\",\"lcd\":\"%ux%u\",\"lcd_driver\":\"%s\","
                   "\"version\":\"" FLUGOS_FULL_VERSION "\","
                   "\"tab\":%u,\"pkts\":%lu,\"mgmt\":%lu,\"ctrl\":%lu,\"data\":%lu,"
-                  "\"ch\":%d,\"hop\":%d,\"rssi\":%d,\"ssid\":\"%s\","
+                  "\"ch\":%d,\"sun_ch\":%d,\"hop\":%d,\"rssi\":%d,\"ssid\":\"%s\","
                   "\"track_idx\":%d,\"track\":\"%s\",\"artist\":\"%s\",\"bpm\":%u,\"crate_count\":%d,"
-                  "\"qt\":\"%02x\",\"ax\":%.2f,\"ay\":%.2f,\"az\":%.2f,\"sickness\":%.2f,"
-                  "\"salience\":%u,\"jitter\":%u,\"viscosity\":%.2f,\"reynolds\":%u,\"recalls\":%lu,"
+                  "\"qt\":\"%02x\",\"ax_pq\":\"%ld/%ld\",\"ay_pq\":\"%ld/%ld\",\"az_pq\":\"%ld/%ld\",\"sickness_pq\":\"0/1\","
+                  "\"salience\":%u,\"jitter\":%u,\"viscosity_pq\":\"%ld/%ld\",\"reynolds\":%u,\"recalls\":%lu,"
                   "\"wupz_fold\":\"0x%016llx\",\"quantum_pos_u64\":\"0x%016llx\",\"quantum_neg_u64\":\"0x%016llx\","
-                  "\"kompress_b158\":\"%s\",\"kompress_ratio\":20.19,"
+                  "\"kompress_b158\":\"%s\",\"kompress_ratio_pq\":\"%ld/%ld\","
                   "\"splashes\":%lu,\"peer_rx\":%lu,\"es8311\":%d,\"es7210\":%d,"
                   "\"batt_mv\":%u,\"batt_pct\":%u}\n",
                   g_board_is_18 ? "ESP32-S3-Touch-AMOLED-1.8" : "ESP32-S3-Touch-AMOLED-2.06",
@@ -1868,15 +1896,15 @@ static void s3_emit_status_json() {
                   g_lcd_w, g_lcd_h, g_lcd_driver_name,
                   g_s3_active_tab, (unsigned long)g_s3_total_pkts,
                   (unsigned long)g_s3_mgmt_pkts, (unsigned long)g_s3_ctrl_pkts, (unsigned long)g_s3_data_pkts,
-                  g_s3_channel, g_s3_hopping ? 1 : 0, (int)g_s3_last_rssi, g_s3_last_ssid,
+                  g_s3_channel, (int)g_s3_sun_ch, g_s3_hopping ? 1 : 0, (int)g_s3_last_rssi, g_s3_last_ssid,
                   g_s3_track_idx + 1, t->title, t->artist, t->bpm, S3_FAV_COUNT,
-                  g_imu.qt_byte, g_imu.ax, g_imu.ay, g_imu.az, g_imu.sickness,
-                  g_ms_mean_salience, g_ms_mean_jitter, g_ms_viscosity, g_ms_reynolds,
+                  g_imu.qt_byte, (long)axP, (long)axQ, (long)ayP, (long)ayQ, (long)azP, (long)azQ,
+                  g_ms_mean_salience, g_ms_mean_jitter, (long)visP, (long)visQ, g_ms_reynolds,
                   (unsigned long)g_ms_ecphoric_recalls,
                   (unsigned long long)g_kompress_wupz_u64,
                   (unsigned long long)g_kompress_pos_u64,
                   (unsigned long long)g_kompress_neg_u64,
-                  g_kompress_hex,
+                  g_kompress_hex, (long)krP, (long)krQ,
                   (unsigned long)g_wp_splashes, (unsigned long)g_s3_peer_rx_cnt,
                   g_es8311_ok ? 1 : 0, g_es7210_ok ? 1 : 0,
                   g_power.batt_mv, g_power.batt_pct);
@@ -1885,6 +1913,9 @@ static void s3_emit_status_json() {
 static void s3_emit_medusa_json() {
     const S3FavTrack* t = &S3_FAVOURITES[g_s3_track_idx];
     uint8_t n_ap = (g_medusa_ap_count > 0) ? g_medusa_ap_count : 1;
+    int32_t entP = 0, entQ = 1, cohP = 0, cohQ = 1;
+    rust_reduce_rational_pq((int32_t)(g_medusa_entropy * 1000), 1000, &entP, &entQ);
+    rust_reduce_rational_pq((int32_t)(g_medusa_coherence * 1000), 1000, &cohP, &cohQ);
     Serial.printf("# JSON|{\"node\":\"%s\",\"vertex\":\"%s\",\"archetype\":\"%s\","
                   "\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\","
                   "\"version\":\"" FLUGOS_FULL_VERSION "\",\"triad_version\":\"0.43.0\","
@@ -1894,7 +1925,7 @@ static void s3_emit_medusa_json() {
                   "\"tts_text\":\"%s\",\"tts_count\":%lu,"
                   "\"freq_hz\":%u,\"trit\":%d,\"persona\":\"%s\","
                   "\"seq\":%lu,\"networks\":%u,\"mean_rssi\":%d,"
-                  "\"entropy_bits\":%.4f,\"n_np_coherence\":%.4f,\"trits\":\"%s\","
+                  "\"entropy_pq\":\"%ld/%ld\",\"coherence_pq\":\"%ld/%ld\",\"trits\":\"%s\","
                   "\"salience\":%u,\"reynolds\":%u,\"anicca_ttl\":[%u,%u,%u],"
                   "\"track_idx\":%d,\"track\":\"%s\",\"artist\":\"%s\",\"bpm\":%u,"
                   "\"free_heap\":%lu,\"uptime_ms\":%lu,\"mode\":\"PASSIVE_STA_ONLY\"}\n",
@@ -1904,7 +1935,7 @@ static void s3_emit_medusa_json() {
                   g_tts_last_text, (unsigned long)g_tts_speak_count,
                   (unsigned)g_medusa_freq_hz, (int)g_triad_self_pole, g_triad_persona,
                   (unsigned long)g_medusa_scan_seq, (unsigned)n_ap, (int)g_medusa_mean_rssi,
-                  g_medusa_entropy, g_medusa_coherence, g_medusa_trits,
+                  (long)entP, (long)entQ, (long)cohP, (long)cohQ, g_medusa_trits,
                   g_ms_mean_salience, g_ms_reynolds,
                   g_triad_nodes[0].ttl_q8, g_triad_nodes[1].ttl_q8, g_triad_nodes[2].ttl_q8,
                   g_s3_track_idx + 1, t->title, t->artist, t->bpm,
@@ -2279,7 +2310,7 @@ static void s3_amoled_loop() {
         last_hop_ms = now;
         g_s3_mesh_slot = !g_s3_mesh_slot;
         if (g_s3_mesh_slot) {
-            g_s3_channel = S3_MESH_CHANNEL;
+            g_s3_channel = (int)g_s3_sun_ch;
             esp_wifi_set_channel(g_s3_channel, WIFI_SECOND_CHAN_NONE);
             s3_espnow_broadcast(32, 32, 0);
         } else {
@@ -2289,6 +2320,7 @@ static void s3_amoled_loop() {
         }
     } else if (!g_s3_hopping && (now - last_peer_ms >= 600)) {
         last_peer_ms = now;
+        esp_wifi_set_channel((int)g_s3_sun_ch, WIFI_SECOND_CHAN_NONE);
         s3_espnow_broadcast(32, 32, 0);
     }
 
