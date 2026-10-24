@@ -35,7 +35,7 @@
 #include "s3_amoled_hal.h"
 
 #define S3_MAX_CHANNEL  13
-#define S3_MESH_CHANNEL 6
+#define S3_MESH_CHANNEL 1
 
 extern "C" {
   void rust_reduce_rational_pq(int32_t num, int32_t den, int32_t *out_p, int32_t *out_q);
@@ -475,18 +475,20 @@ static uint8_t s3_triad_online_count() {
 
 #if defined(ESP_IDF_VERSION) && (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0))
 static void s3_espnow_recv_cb(const esp_now_recv_info_t* recv_info, const uint8_t* data, int len) {
-    (void)recv_info;
+    const uint8_t* src_mac = recv_info ? recv_info->src_addr : nullptr;
 #else
 static void s3_espnow_recv_cb(const uint8_t* mac_addr, const uint8_t* data, int len) {
-    (void)mac_addr;
+    const uint8_t* src_mac = mac_addr;
 #endif
     if (!data || len < 8) return;
+    if (src_mac && memcmp(src_mac, g_s3_mac, 6) == 0) return;
 
     // 1. Accept 8..64-byte `baye-rust` BayeCapsule ("BC") from pure-#![no_std]-Rust sibling watches & SUN:TDECK!
     if (data[0] == 'B' && data[1] == 'C') {
         g_s3_peer_rx_cnt++;
-        // Extract sender MAC low byte (at offset 9 if >= 16B header, else map to ADA/OMN)
-        uint8_t mac_low = (len >= 10) ? data[9] : 0xC4;
+        g_s3_sun_ch = g_s3_channel;
+        // Extract sender MAC low byte (at offset 9 if >= 16B header, else from src_mac)
+        uint8_t mac_low = (len >= 10) ? data[9] : (src_mac ? src_mac[5] : 0xC4);
         uint8_t nid = (mac_low == 0xC4) ? 0 : ((mac_low == 0xB0) ? 1 : 2);
         if (nid == g_triad_self_id) nid = (g_triad_self_id + 1) % 3;
         g_triad_nodes[nid].online  = true;
@@ -520,9 +522,16 @@ static void s3_espnow_recv_cb(const uint8_t* mac_addr, const uint8_t* data, int 
         }
         return;
     }
-    if (nid > 2 || nid == g_triad_self_id) return;
+    if (nid > 2) return;
+    // If a sibling watch defaulted to the same triad slot as us, map it to an open peer slot so we never drop it!
+    if (nid == g_triad_self_id) {
+        uint8_t mac_low = src_mac ? src_mac[5] : (uint8_t)(pkt->seq + 1);
+        nid = (mac_low ^ g_triad_self_id) % 3;
+        if (nid == g_triad_self_id) nid = (g_triad_self_id + 1) % 3;
+    }
 
     g_s3_peer_rx_cnt++;
+    g_s3_sun_ch = g_s3_channel;
     g_triad_nodes[nid].online    = true;
     g_triad_nodes[nid].ttl_q8    = 255; // Re-bloomed from polyp -> active medusa!
     g_triad_nodes[nid].qt_byte   = pkt->qt_byte;
@@ -563,15 +572,7 @@ static void s3_espnow_broadcast(uint8_t sx, uint8_t sy, int16_t amp) {
     pkt.splash_amp = amp;
     pkt.seq        = g_s3_witness_seq;
 
-    static const uint8_t bcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-    int prev_ch = g_s3_channel;
-    if (prev_ch != (int)g_s3_sun_ch) {
-        esp_wifi_set_channel((int)g_s3_sun_ch, WIFI_SECOND_CHAN_NONE);
-        g_s3_channel = (int)g_s3_sun_ch;
-    }
-    esp_now_send(bcast, (const uint8_t*)&pkt, sizeof(pkt));
-
-    // Also emit 64B `baye-rust` "BC" Splash capsule via #![no_std] Rust so pure-Rust watches sync!
+    // Also build 64B `baye-rust` "BC" Splash capsule via #![no_std] Rust so pure-Rust watches sync!
     uint8_t bc_buf[64];
     rust_build_baye_splash_capsule(
         bc_buf,
@@ -582,13 +583,30 @@ static void s3_espnow_broadcast(uint8_t sx, uint8_t sy, int16_t amp) {
         g_medusa_freq_hz,
         g_ms_mean_salience
     );
+
+    static const uint8_t bcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    int primary_ch = (int)g_s3_sun_ch;
+    if (primary_ch < 1 || primary_ch > S3_MAX_CHANNEL) primary_ch = S3_MESH_CHANNEL;
+    if (g_s3_channel != primary_ch) {
+        esp_wifi_set_channel(primary_ch, WIFI_SECOND_CHAN_NONE);
+        g_s3_channel = primary_ch;
+    }
+    esp_now_send(bcast, (const uint8_t*)&pkt, sizeof(pkt));
     esp_now_send(bcast, bc_buf, sizeof(bc_buf));
+
+    // Dual-cast across Ch 1 (`Rakuten-4CE2` / `baye-rust`) and Ch 6 (`MEMNET` / legacy Triad)
+    int alt_ch = (primary_ch == 1) ? 6 : 1;
+    esp_wifi_set_channel(alt_ch, WIFI_SECOND_CHAN_NONE);
+    esp_now_send(bcast, (const uint8_t*)&pkt, sizeof(pkt));
+    esp_now_send(bcast, bc_buf, sizeof(bc_buf));
+    esp_wifi_set_channel(primary_ch, WIFI_SECOND_CHAN_NONE);
+    g_s3_channel = primary_ch;
 }
 
 // Non-blocking 1-channel-per-tick wake-up capsule (zero delay() stall on the UI loop!)
 static void s3_espnow_wake_siblings(uint8_t sx, uint8_t sy, int16_t amp) {
     if (!g_s3_espnow_ok) return;
-    static const uint8_t sweep_order[4] = {6, 1, 11, 3};
+    static const uint8_t sweep_order[4] = {1, 6, 11, 3};
     static uint8_t sweep_idx = 0;
     uint8_t target_ch = sweep_order[sweep_idx & 3];
     sweep_idx++;
@@ -1064,12 +1082,21 @@ static void s3_render_tab_zen(S3Canvas& c) {
 
     float sick = g_imu.sickness;
     uint8_t sick_u8 = (uint8_t)(sick * 200.0f);
+    const int ring_span = outer_r2 - inner_r2;
+    const int ring_lo   = ring_span / 5;
+    const int ring_hi   = (ring_span * 4) / 5;
+    const int32_t inv_2inner_q16  = ((WAVE_POOL_N - 2) << 16) / (2 * inner_r);
+    const int32_t inv_innerr2_q16 = (48 << 16) / inner_r2;
 
     for (int py = y_start; py < y_end; py++) {
         int dy  = py - cy;
         int dy2 = dy * dy;
         if (dy2 > outer_r2) continue;
 
+        int gy = (((dy + inner_r) * inv_2inner_q16) >> 16) + 1;
+        if (gy < 1) gy = 1;
+        if (gy > WAVE_POOL_N - 2) gy = WAVE_POOL_N - 2;
+        const int16_t* wp_row = g_wp_u_curr[gy];
         uint16_t* row_ptr = &s_band_buf[(py - c.y0) * W];
 
         for (int px = 8; px < W - 8; px++) {
@@ -1079,22 +1106,18 @@ static void s3_render_tab_zen(S3Canvas& c) {
 
             if (r2 >= inner_r2) {
                 int ring_band = r2 - inner_r2;
-                int ring_span = outer_r2 - inner_r2;
-                if (ring_band < (ring_span / 5) || ring_band > (ring_span * 4 / 5)) {
+                if (ring_band < ring_lo || ring_band > ring_hi) {
                     row_ptr[px] = (sick_u8 > 60) ? COL_CORAL : COL_AMBER_INFO;
                 } else {
                     row_ptr[px] = COL_BG_ELEV;
                 }
             } else {
-                int gx = ((dx + inner_r) * (WAVE_POOL_N - 2)) / (2 * inner_r) + 1;
-                int gy = ((dy + inner_r) * (WAVE_POOL_N - 2)) / (2 * inner_r) + 1;
+                int gx = (((dx + inner_r) * inv_2inner_q16) >> 16) + 1;
                 if (gx < 1) gx = 1;
                 if (gx > WAVE_POOL_N - 2) gx = WAVE_POOL_N - 2;
-                if (gy < 1) gy = 1;
-                if (gy > WAVE_POOL_N - 2) gy = WAVE_POOL_N - 2;
 
-                int16_t h = g_wp_u_curr[gy][gx];
-                int rim = (r2 * 48) / inner_r2;
+                int16_t h = wp_row[gx];
+                int rim = (int)(((int32_t)r2 * inv_innerr2_q16) >> 16);
 
                 uint8_t r = 6 + (uint8_t)((rim * 18) >> 6);
                 uint8_t g = 10 + (uint8_t)((rim * 36) >> 6);
@@ -2439,9 +2462,9 @@ static void s3_amoled_loop() {
     learn_tick(now);
     net_tick(now);
 
-    // oxi-phoenix: Saving/Critical slow the render loop (frame_ms); otherwise full 25 fps.
+    // oxi-phoenix: Saving/Critical slow the render loop (frame_ms); otherwise full 40 fps (25 ms).
     const unsigned long frame_period =
-        (g_ph_budget.mode == PH_SAVING || g_ph_budget.mode == PH_CRITICAL) ? g_ph_budget.frame_ms : 40;
+        (g_ph_budget.mode == PH_SAVING || g_ph_budget.mode == PH_CRITICAL) ? g_ph_budget.frame_ms : 25;
     if (now - last_frame_ms >= frame_period) {
         last_frame_ms = now;
         s3_touch_poll();

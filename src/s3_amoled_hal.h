@@ -34,7 +34,7 @@
 #define AMOLED_MAX_W        410
 #define AMOLED_MAX_H        502
 #define AMOLED_BAND_H       28     // Even band height (448 = 16*28; 502 = 17*28 + 26)
-#define QSPI_CHUNK_PIXELS   4096   // 4x larger QSPI DMA chunk size (50 transactions/frame vs 206)
+#define QSPI_CHUNK_PIXELS   (AMOLED_MAX_W * AMOLED_BAND_H) // Full 28-row band in 1 QSPI DMA transfer (16-18/frame)
 
 // Runtime-detected display geometry (defaults to 1.8" 368x448, updated at boot)
 static bool     g_board_is_18 = true;
@@ -151,15 +151,16 @@ static const char* g_lcd_driver_name = "SH8601";
 static bool        g_es7210_ok       = false;
 
 static bool s3_tca9554_init_and_reset() {
-#if defined(FLUGOS_BOARD_206)
-    bool force_206 = true;
+#if defined(FLUGOS_BOARD_18)
+    bool force_18 = true;
 #else
-    bool force_206 = false;
+    bool force_18 = false;
 #endif
     bool has_es7210  = s3_i2c_probe(I2C_ADDR_ES7210);
     bool has_tca9554 = s3_i2c_probe(I2C_ADDR_TCA9554);
 
-    if (force_206 || has_es7210 || !has_tca9554) {
+    // 1.8" ("little one") has TCA9554 @ 0x20 and no ES7210 @ 0x40; 2.06" has ES7210 @ 0x40 and no TCA9554 @ 0x20
+    if (!force_18 && (has_es7210 || !has_tca9554)) {
         g_board_is_18     = false;
         g_lcd_w           = 410;
         g_lcd_h           = 502;
@@ -622,11 +623,16 @@ static void s3_imu_poll() {
                                        s3_trit_bits(g_imu.trit_d));
         }
     }
-    uint8_t rbuf[3] = {0};
-    if (s3_i2c_read_bytes(I2C_ADDR_PCF85063, 0x04, rbuf, 3)) {
-        g_imu.rtc_s = bcd2dec(rbuf[0] & 0x7F);
-        g_imu.rtc_m = bcd2dec(rbuf[1] & 0x7F);
-        g_imu.rtc_h = bcd2dec(rbuf[2] & 0x3F);
+    static unsigned long s_last_rtc_ms = 0;
+    unsigned long now_ms = millis();
+    if (now_ms - s_last_rtc_ms >= 1000) {
+        s_last_rtc_ms = now_ms;
+        uint8_t rbuf[3] = {0};
+        if (s3_i2c_read_bytes(I2C_ADDR_PCF85063, 0x04, rbuf, 3)) {
+            g_imu.rtc_s = bcd2dec(rbuf[0] & 0x7F);
+            g_imu.rtc_m = bcd2dec(rbuf[1] & 0x7F);
+            g_imu.rtc_h = bcd2dec(rbuf[2] & 0x3F);
+        }
     }
 }
 
