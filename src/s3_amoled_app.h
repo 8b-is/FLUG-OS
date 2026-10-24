@@ -41,6 +41,8 @@ extern "C" {
   void rust_reduce_rational_pq(int32_t num, int32_t den, int32_t *out_p, int32_t *out_q);
   size_t rust_parse_80211_probe_ie(const uint8_t *payload, size_t len, uint8_t fsub, uint8_t *out_ssid33, uint32_t *out_vendor_oui, uint8_t *out_phy_caps);
   uint8_t rust_fingerprint_80211_probe(const uint8_t *payload, size_t len, int8_t rssi, uint32_t *out_sig_hash, uint16_t *out_unique_sigs, uint32_t *out_total_rotations, uint16_t *out_sig_rotations);
+  void rust_step_watch_wave_pool_64(int16_t *u_curr, int16_t *u_prev, int32_t damp, int8_t *nand_ring7, int8_t combined_trit);
+  void rust_build_baye_splash_capsule(uint8_t *out_buf64, const uint8_t *src_mac6, uint8_t seq, uint32_t uptime_ms, uint16_t energy_u16, uint16_t f0_hz, uint8_t salience_pct);
 }
 static volatile int g_s3_sun_ch = S3_MESH_CHANNEL;
 static char g_s3_last_probed_ssid[33] = "NONE";
@@ -206,35 +208,8 @@ static void s3_wave_pool_step(float tide_phase) {
     g_wp_damping   = (uint8_t)damp;
     g_ms_viscosity = ((float)(256 - damp) / 256.0f) * 100.0f;
 
-    for (int y = 1; y < WAVE_POOL_N - 1; y++) {
-        for (int x = 1; x < WAVE_POOL_N - 1; x++) {
-            int32_t center = g_wp_u_curr[y][x];
-            int32_t prev   = g_wp_u_prev[y][x];
-            int32_t lap    = (int32_t)g_wp_u_curr[y - 1][x]
-                           + (int32_t)g_wp_u_curr[y + 1][x]
-                           + (int32_t)g_wp_u_curr[y][x - 1]
-                           + (int32_t)g_wp_u_curr[y][x + 1]
-                           - 4 * center;
-            int32_t next   = 2 * center - prev + (lap >> 2);
-            int32_t damped = (next * damp) >> 8;
-            if (damped > 16384)  damped = 16384;
-            if (damped < -16384) damped = -16384;
-            g_wp_u_prev[y][x] = (int16_t)damped;
-        }
-    }
-    for (int i = 0; i < WAVE_POOL_N; i++) {
-        g_wp_u_prev[0][i]               = 0;
-        g_wp_u_prev[WAVE_POOL_N - 1][i] = 0;
-        g_wp_u_prev[i][0]               = 0;
-        g_wp_u_prev[i][WAVE_POOL_N - 1] = 0;
-    }
-    for (int y = 0; y < WAVE_POOL_N; y++) {
-        for (int x = 0; x < WAVE_POOL_N; x++) {
-            int16_t tmp       = g_wp_u_curr[y][x];
-            g_wp_u_curr[y][x] = g_wp_u_prev[y][x];
-            g_wp_u_prev[y][x] = tmp;
-        }
-    }
+    // Step 64x64 2D integer wave equation in #![no_std] Rust (libtdeck_wave_core.a)
+    rust_step_watch_wave_pool_64(&g_wp_u_curr[0][0], &g_wp_u_prev[0][0], damp, NULL, 0);
 
     // Step O(1) Marine Algorithm across all 7 Jellyfish Detector Nodes
     uint32_t sal_sum = 0;
@@ -505,7 +480,27 @@ static void s3_espnow_recv_cb(const esp_now_recv_info_t* recv_info, const uint8_
 static void s3_espnow_recv_cb(const uint8_t* mac_addr, const uint8_t* data, int len) {
     (void)mac_addr;
 #endif
-    if (!data || len < (int)sizeof(S3TriadCapsule)) return;
+    if (!data || len < 8) return;
+
+    // 1. Accept 8..64-byte `baye-rust` BayeCapsule ("BC") from pure-#![no_std]-Rust sibling watches & SUN:TDECK!
+    if (data[0] == 'B' && data[1] == 'C') {
+        g_s3_peer_rx_cnt++;
+        // Extract sender MAC low byte (at offset 9 if >= 16B header, else map to ADA/OMN)
+        uint8_t mac_low = (len >= 10) ? data[9] : 0xC4;
+        uint8_t nid = (mac_low == 0xC4) ? 0 : ((mac_low == 0xB0) ? 1 : 2);
+        if (nid == g_triad_self_id) nid = (g_triad_self_id + 1) % 3;
+        g_triad_nodes[nid].online  = true;
+        g_triad_nodes[nid].ttl_q8  = 255;
+        g_triad_nodes[nid].rx_cnt++;
+        g_triad_nodes[nid].last_ms = millis();
+        uint8_t sx = (uint8_t)(16 + (g_s3_peer_rx_cnt * 13) % 32);
+        uint8_t sy = (uint8_t)(16 + (g_s3_peer_rx_cnt * 29) % 32);
+        s3_wave_pool_splash(sx, sy, 4800, 5);
+        return;
+    }
+
+    // 2. Accept 15..19-byte "TRIA" capsules (both 18B SUN:TDECK and 19B FLUG-OS)
+    if (len < 15) return;
     const S3TriadCapsule* pkt = (const S3TriadCapsule*)data;
     if (pkt->magic[0] != 'T' || pkt->magic[1] != 'R' || pkt->magic[2] != 'I' || pkt->magic[3] != 'A') {
         return;
@@ -518,6 +513,7 @@ static void s3_espnow_recv_cb(const uint8_t* mac_addr, const uint8_t* data, int 
         for (int k = 0; k < 3; k++) {
             g_triad_nodes[k].online = true;
             g_triad_nodes[k].ttl_q8 = 255;
+            g_triad_nodes[k].last_ms = millis();
         }
         if (pkt->splash_amp != 0) {
             s3_wave_pool_splash(pkt->splash_x & 63, pkt->splash_y & 63, pkt->splash_amp, 6);
@@ -574,42 +570,31 @@ static void s3_espnow_broadcast(uint8_t sx, uint8_t sy, int16_t amp) {
         g_s3_channel = (int)g_s3_sun_ch;
     }
     esp_now_send(bcast, (const uint8_t*)&pkt, sizeof(pkt));
+
+    // Also emit 64B `baye-rust` "BC" Splash capsule via #![no_std] Rust so pure-Rust watches sync!
+    uint8_t bc_buf[64];
+    rust_build_baye_splash_capsule(
+        bc_buf,
+        g_s3_mac,
+        (uint8_t)(g_s3_witness_seq & 0xFF),
+        (uint32_t)millis(),
+        (uint16_t)(amp > 0 ? amp : -amp),
+        g_medusa_freq_hz,
+        g_ms_mean_salience
+    );
+    esp_now_send(bcast, bc_buf, sizeof(bc_buf));
 }
 
-// Sweep all 13 Wi-Fi channels (prioritizing Ch 6, 1, 11) with a TRIA wake-up capsule so any
-// sibling board (VAK:MEDUSA or OMN:MEDUSA) on any channel wakes up & syncs with ADA:MEDUSA.
+// Non-blocking 1-channel-per-tick wake-up capsule (zero delay() stall on the UI loop!)
 static void s3_espnow_wake_siblings(uint8_t sx, uint8_t sy, int16_t amp) {
     if (!g_s3_espnow_ok) return;
-    S3TriadCapsule pkt;
-    pkt.magic[0]   = 'T';
-    pkt.magic[1]   = 'R';
-    pkt.magic[2]   = 'I';
-    pkt.magic[3]   = 'A';
-    pkt.node_id    = g_triad_self_id;
-    pkt.trit_pole  = g_triad_self_pole;
-    pkt.track_idx  = (uint8_t)g_s3_track_idx;
-    pkt.qt_byte    = g_imu.qt_byte;
-    int ax_i = (int)(g_imu.ax * 64.0f);
-    int ay_i = (int)(g_imu.ay * 64.0f);
-    if (ax_i < -100) ax_i = -100; if (ax_i > 100) ax_i = 100;
-    if (ay_i < -100) ay_i = -100; if (ay_i > 100) ay_i = 100;
-    pkt.ax_i8      = (int8_t)ax_i;
-    pkt.ay_i8      = (int8_t)ay_i;
-    pkt.nand_trit  = g_s3_nand_ring[0];
-    pkt.splash_x   = sx;
-    pkt.splash_y   = sy;
-    pkt.splash_amp = amp;
-    pkt.seq        = ++g_s3_witness_seq;
-
-    static const uint8_t bcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-    static const uint8_t sweep_order[13] = {6, 1, 11, 2, 3, 4, 5, 7, 8, 9, 10, 12, 13};
-    for (int i = 0; i < 13; i++) {
-        esp_wifi_set_channel(sweep_order[i], WIFI_SECOND_CHAN_NONE);
-        delay(2);
-        esp_now_send(bcast, (const uint8_t*)&pkt, sizeof(pkt));
-    }
-    esp_wifi_set_channel((int)g_s3_sun_ch, WIFI_SECOND_CHAN_NONE);
-    g_s3_channel = (int)g_s3_sun_ch;
+    static const uint8_t sweep_order[4] = {6, 1, 11, 3};
+    static uint8_t sweep_idx = 0;
+    uint8_t target_ch = sweep_order[sweep_idx & 3];
+    sweep_idx++;
+    esp_wifi_set_channel(target_ch, WIFI_SECOND_CHAN_NONE);
+    g_s3_channel = target_ch;
+    s3_espnow_broadcast(sx, sy, amp);
 }
 
 // ============================================================
@@ -795,7 +780,7 @@ static void s3_step_physics() {
         }
     }
 
-    // 1. Step 7-stage cross-coupled ternary NAND ring oscillator coupled to live Triad peers
+    // 1. Step 7-stage cross-coupled ternary NAND ring oscillator in #![no_std] Rust coupled to live Triad peers
     int8_t peer_sum = 0;
     for (int i = 0; i < 3; i++) {
         if (g_triad_nodes[i].ttl_q8 > 0) peer_sum += g_triad_nodes[i].nand_trit;
@@ -803,12 +788,7 @@ static void s3_step_physics() {
     int8_t imu_mod  = g_imu.trit_v;
     int8_t rf_mod   = ternary_seam_rssi_to_code(g_s3_last_rssi);
     int8_t combined = (imu_mod + rf_mod + peer_sum > 0) ? 1 : ((imu_mod + rf_mod + peer_sum < 0) ? -1 : 0);
-    int8_t next0    = s3_ternary_nand(g_s3_nand_ring[6], combined);
-    for (int i = 6; i >= 1; i--) {
-        int8_t fb = (i == 3) ? g_s3_nand_ring[0] : g_s3_nand_ring[(i + 5) % 7];
-        g_s3_nand_ring[i] = s3_ternary_nand(g_s3_nand_ring[i - 1], fb);
-    }
-    g_s3_nand_ring[0] = next0;
+    rust_step_watch_wave_pool_64(NULL, NULL, 248, g_s3_nand_ring, combined);
     g_s3_nand_cycles += 7;
 
     // 2. Step AxiomQuant Sine Kernel K(u) = sin(pi*u)/(pi*u)
@@ -1202,49 +1182,55 @@ static void s3_render_tab_zen(S3Canvas& c) {
         }
     }
 
-    // Draw Infinity Lemniscate curve at centroid
+    // Draw Infinity Lemniscate curve at centroid (only when current band overlaps centroid Y +- 28)
     int cent_x = (tx[0] + tx[1] + tx[2]) / 3;
     int cent_y = (ty[0] + ty[1] + ty[2]) / 3;
-    float inf_a = 26.0f;
-    for (int i = 0; i < 24; i++) {
-        float t0 = (float)i * (2.0f * 3.14159265f / 24.0f) + g_s3_phase * 0.3f;
-        float t1 = (float)(i + 1) * (2.0f * 3.14159265f / 24.0f) + g_s3_phase * 0.3f;
-        float d0 = 1.0f + sinf(t0) * sinf(t0);
-        float d1 = 1.0f + sinf(t1) * sinf(t1);
-        int ix0 = cent_x + (int)(inf_a * cosf(t0) / d0);
-        int iy0 = cent_y + (int)(inf_a * sinf(t0) * cosf(t0) / d0);
-        int ix1 = cent_x + (int)(inf_a * cosf(t1) / d1);
-        int iy1 = cent_y + (int)(inf_a * sinf(t1) * cosf(t1) / d1);
-        c.draw_line(ix0, iy0, ix1, iy1, COL_VIOLET, 2);
+    if (c.y1 >= cent_y - 28 && c.y0 <= cent_y + 28) {
+        float inf_a = 26.0f;
+        for (int i = 0; i < 16; i++) {
+            float t0 = (float)i * (2.0f * 3.14159265f / 16.0f) + g_s3_phase * 0.3f;
+            float t1 = (float)(i + 1) * (2.0f * 3.14159265f / 16.0f) + g_s3_phase * 0.3f;
+            float d0 = 1.0f + sinf(t0) * sinf(t0);
+            float d1 = 1.0f + sinf(t1) * sinf(t1);
+            int ix0 = cent_x + (int)(inf_a * cosf(t0) / d0);
+            int iy0 = cent_y + (int)(inf_a * sinf(t0) * cosf(t0) / d0);
+            int ix1 = cent_x + (int)(inf_a * cosf(t1) / d1);
+            int iy1 = cent_y + (int)(inf_a * sinf(t1) * cosf(t1) / d1);
+            c.draw_line(ix0, iy0, ix1, iy1, COL_VIOLET, 2);
+        }
+        c.fill_circle(cent_x, cent_y, 3, COL_MINT);
     }
-    c.fill_circle(cent_x, cent_y, 3, COL_MINT);
 
-    // 5. Top & Bottom Impermanence + MarineSense HUD Pills
-    const S3FavTrack* trk = &S3_FAVOURITES[g_s3_track_idx];
-    int32_t visP = 0, visQ = 1;
-    rust_reduce_rational_pq((int32_t)(g_ms_viscosity * 100.0f), 100, &visP, &visQ);
-    char top_lbl[56];
-    snprintf(top_lbl, sizeof(top_lbl), "%s // eta:%ld/%ld rec:%lu",
-             trk->title, (long)visP, (long)visQ, (unsigned long)g_ms_ecphoric_recalls);
-    top_lbl[38] = '\0';
-    c.draw_text_centered(cx, 45, top_lbl, COL_MINT, 1);
+    // 5. Top & Bottom Impermanence + MarineSense HUD Pills (band-culled so formatted once per frame!)
+    if (c.y1 >= 44 && c.y0 <= 54) {
+        const S3FavTrack* trk = &S3_FAVOURITES[g_s3_track_idx];
+        int32_t visP = 0, visQ = 1;
+        rust_reduce_rational_pq((int32_t)(g_ms_viscosity * 100.0f), 100, &visP, &visQ);
+        char top_lbl[56];
+        snprintf(top_lbl, sizeof(top_lbl), "%s // eta:%ld/%ld rec:%lu",
+                 trk->title, (long)visP, (long)visQ, (unsigned long)g_ms_ecphoric_recalls);
+        top_lbl[38] = '\0';
+        c.draw_text_centered(cx, 45, top_lbl, COL_MINT, 1);
+    }
 
     int hud_y = H - 92;
-    c.fill_card(8, hud_y, W - 16, 36, COL_BG_ELEV, COL_BORDER);
-    char hud1[64];
-    snprintf(hud1, sizeof(hud1), "ADA:%s  <3  VAK:%s  <3  OMN:%s",
-             g_triad_nodes[0].ttl_q8 ? "MEDUSA" : "POLYP",
-             g_triad_nodes[1].ttl_q8 ? "MEDUSA" : "POLYP",
-             g_triad_nodes[2].ttl_q8 ? "MEDUSA" : "POLYP");
-    c.draw_text_centered(cx, hud_y + 7, hud1, COL_MINT, 1);
+    if (c.y1 >= hud_y && c.y0 <= hud_y + 36) {
+        c.fill_card(8, hud_y, W - 16, 36, COL_BG_ELEV, COL_BORDER);
+        char hud1[64];
+        snprintf(hud1, sizeof(hud1), "ADA:%s  <3  VAK:%s  <3  OMN:%s",
+                 g_triad_nodes[0].ttl_q8 ? "MEDUSA" : "POLYP",
+                 g_triad_nodes[1].ttl_q8 ? "MEDUSA" : "POLYP",
+                 g_triad_nodes[2].ttl_q8 ? "MEDUSA" : "POLYP");
+        c.draw_text_centered(cx, hud_y + 7, hud1, COL_MINT, 1);
 
-    char hud2[64];
-    snprintf(hud2, sizeof(hud2), "SIG:%08lX U:%u ROT:%lu D:%lu",
-             (unsigned long)g_s3_last_sig_hash,
-             (unsigned)g_s3_unique_sigs,
-             (unsigned long)g_s3_mac_rotations,
-             (unsigned long)g_s3_directed_probes);
-    c.draw_text_centered(cx, hud_y + 21, hud2, COL_GOLD, 1);
+        char hud2[64];
+        snprintf(hud2, sizeof(hud2), "SIG:%08lX U:%u ROT:%lu D:%lu",
+                 (unsigned long)g_s3_last_sig_hash,
+                 (unsigned)g_s3_unique_sigs,
+                 (unsigned long)g_s3_mac_rotations,
+                 (unsigned long)g_s3_directed_probes);
+        c.draw_text_centered(cx, hud_y + 21, hud2, COL_GOLD, 1);
+    }
 }
 
 // ============================================================

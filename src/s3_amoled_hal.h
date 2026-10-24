@@ -34,7 +34,7 @@
 #define AMOLED_MAX_W        410
 #define AMOLED_MAX_H        502
 #define AMOLED_BAND_H       28     // Even band height (448 = 16*28; 502 = 17*28 + 26)
-#define QSPI_CHUNK_PIXELS   1024   // Matches baye-rust 1024-pixel QSPI DMA chunk size
+#define QSPI_CHUNK_PIXELS   4096   // 4x larger QSPI DMA chunk size (50 transactions/frame vs 206)
 
 // Runtime-detected display geometry (defaults to 1.8" 368x448, updated at boot)
 static bool     g_board_is_18 = true;
@@ -315,24 +315,27 @@ static void s3_es8311_init_i2s() {
     }
 }
 
-static void s3_es8311_speak(const char* text, uint16_t carrier_hz, int8_t trit) {
-    if (!text || !text[0]) return;
-    strncpy(g_tts_last_text, text, sizeof(g_tts_last_text) - 1);
-    g_tts_last_text[sizeof(g_tts_last_text) - 1] = '\0';
-    g_tts_utterances++;
+static volatile bool s_tts_busy = false;
+static uint16_t      s_tts_carrier_hz = 432;
+static int8_t        s_tts_trit = 0;
 
-    if (!g_es8311_ok) return;
+static void s3_es8311_tts_task(void* arg) {
+    (void)arg;
+    uint16_t carrier_hz = s_tts_carrier_hz;
+    int8_t trit = s_tts_trit;
+    char text[96];
+    strncpy(text, g_tts_last_text, sizeof(text) - 1);
+    text[sizeof(text) - 1] = '\0';
+
     digitalWrite(PIN_SPEAKER_EN, HIGH);
-
     s3_es8311_init_i2s();
     if (g_i2s_tts_ready) {
         int16_t stereo_buf[256]; // 128 stereo frames (8ms @ 16kHz)
         float phase0 = 0.0f, phase1 = 0.0f, phase2 = 0.0f;
-        // Pre-chime: {<3,<3,<3}+1 triad chord (432 / 528 / 852 / 963 Hz)
         const float chord[4] = {432.0f, 528.0f, 852.0f, 963.0f};
         for (int n = 0; n < 4; n++) {
             float f = chord[n];
-            for (int blk = 0; blk < 5; blk++) {
+            for (int blk = 0; blk < 3; blk++) {
                 for (int i = 0; i < 128; i++) {
                     phase0 += (6.2831853f * f) / 16000.0f;
                     if (phase0 > 6.2831853f) phase0 -= 6.2831853f;
@@ -344,12 +347,11 @@ static void s3_es8311_speak(const char* text, uint16_t carrier_hz, int8_t trit) 
                 i2s_write(I2S_NUM_0, stereo_buf, sizeof(stereo_buf), &written, 20);
             }
         }
-        // Formant synthesis over up to 48 characters
         float f0 = (float)((carrier_hz >= 200 && carrier_hz <= 1200) ? carrier_hz : 432) * 0.35f;
         if (trit > 0) f0 *= 1.12f;
         else if (trit < 0) f0 *= 0.92f;
         size_t len = strlen(text);
-        if (len > 48) len = 48;
+        if (len > 36) len = 36;
         for (size_t idx = 0; idx < len; idx++) {
             char c = text[idx];
             if (c >= 'A' && c <= 'Z') c = (char)(c + 32);
@@ -365,7 +367,7 @@ static void s3_es8311_speak(const char* text, uint16_t carrier_hz, int8_t trit) 
                 f2 = 1320.0f + (float)(((uint8_t)c >> 2) & 0x0F) * 45.0f;
                 amp = 3200.0f;
             }
-            for (int blk = 0; blk < 3; blk++) {
+            for (int blk = 0; blk < 2; blk++) {
                 for (int i = 0; i < 128; i++) {
                     phase0 += (6.2831853f * f0) / 16000.0f;
                     phase1 += (6.2831853f * f1) / 16000.0f;
@@ -384,6 +386,21 @@ static void s3_es8311_speak(const char* text, uint16_t carrier_hz, int8_t trit) 
         }
     }
     digitalWrite(PIN_SPEAKER_EN, LOW);
+    s_tts_busy = false;
+    vTaskDelete(NULL);
+}
+
+static void s3_es8311_speak(const char* text, uint16_t carrier_hz, int8_t trit) {
+    if (!text || !text[0]) return;
+    strncpy(g_tts_last_text, text, sizeof(g_tts_last_text) - 1);
+    g_tts_last_text[sizeof(g_tts_last_text) - 1] = '\0';
+    g_tts_utterances++;
+
+    if (!g_es8311_ok || s_tts_busy) return;
+    s_tts_busy = true;
+    s_tts_carrier_hz = carrier_hz;
+    s_tts_trit = trit;
+    xTaskCreatePinnedToCore(s3_es8311_tts_task, "s3_tts", 4096, NULL, 1, NULL, 0);
 }
 
 // ============================================================
@@ -733,7 +750,7 @@ static bool s3_amoled_init() {
     devcfg.address_bits   = 24;
     devcfg.dummy_bits     = 0;
     devcfg.mode           = 0;
-    devcfg.clock_speed_hz = 40 * 1000 * 1000;
+    devcfg.clock_speed_hz = 80 * 1000 * 1000;
     devcfg.spics_io_num   = -1; // Manual CS control on GPIO 12
     devcfg.flags          = SPI_DEVICE_HALFDUPLEX;
     devcfg.queue_size     = 1;
