@@ -370,14 +370,17 @@ static void s3_es8311_tts_task(void* arg) {
             }
             for (int blk = 0; blk < 2; blk++) {
                 for (int i = 0; i < 128; i++) {
+                    // Smooth raised-cosine syllable envelope + soft tanh anti-clipping
+                    int sample_idx = blk * 128 + i;
+                    float env = 0.5f - 0.5f * cosf((6.2831853f * (float)sample_idx) / 384.0f);
                     phase0 += (6.2831853f * f0) / 16000.0f;
                     phase1 += (6.2831853f * f1) / 16000.0f;
                     phase2 += (6.2831853f * f2) / 16000.0f;
                     if (phase0 > 6.2831853f) phase0 -= 6.2831853f;
                     if (phase1 > 6.2831853f) phase1 -= 6.2831853f;
                     if (phase2 > 6.2831853f) phase2 -= 6.2831853f;
-                    float v = 0.45f * sinf(phase0) + 0.35f * sinf(phase1) + 0.20f * sinf(phase2);
-                    int16_t s = (int16_t)(v * amp);
+                    float v = (0.45f * sinf(phase0) + 0.35f * sinf(phase1) + 0.20f * sinf(phase2)) * env;
+                    int16_t s = (int16_t)(tanhf(v * 1.15f) * amp);
                     stereo_buf[i * 2]     = s;
                     stereo_buf[i * 2 + 1] = s;
                 }
@@ -402,6 +405,80 @@ static void s3_es8311_speak(const char* text, uint16_t carrier_hz, int8_t trit) 
     s_tts_carrier_hz = carrier_hz;
     s_tts_trit = trit;
     xTaskCreatePinnedToCore(s3_es8311_tts_task, "s3_tts", 4096, NULL, 1, NULL, 0);
+}
+
+// Synthesize BICEP - GLUE (130 BPM, C minor: Abmaj7 -> Fm7 -> Cm9 -> Bb6, UK breakbeat + Reese sub + vocal chop)
+static void s3_es8311_play_bicep_glue() {
+    if (!g_es8311_ok) return;
+    digitalWrite(PIN_SPEAKER_EN, HIGH);
+    s3_es8311_init_i2s();
+    if (g_i2s_tts_ready) {
+        // 4 chords in C minor (Abmaj7, Fm7, Cm9, Bb6): [bass_hz, pad1_hz, pad2_hz, vox_hz]
+        static const float chords[4][4] = {
+            {103.83f, 207.65f, 311.13f, 783.99f}, // Ab2, Ab3, Eb4, G5 (vocal chop "ooh")
+            { 87.31f, 174.61f, 261.63f, 698.46f}, // F2,  F3,  C4,  F5
+            {130.81f, 261.63f, 392.00f, 622.25f}, // C3,  C4,  G4,  Eb5
+            {116.54f, 233.08f, 349.23f, 587.33f}, // Bb2, Bb3, F4,  D5
+        };
+        // 8-step UK breakbeat pattern per chord (kick=1, snare=2, hat=3): K . . K S . K S
+        static const uint8_t brk[8] = {1, 3, 3, 1, 2, 3, 1, 2};
+        int16_t stereo_buf[256];
+        float ph_b1 = 0.0f, ph_b2 = 0.0f, ph_p1 = 0.0f, ph_p2 = 0.0f, ph_vx = 0.0f, ph_k = 0.0f;
+        uint32_t lfsr = 0x9A6D44C0u;
+        // 130 BPM -> 1 eighth-note step = ~230 ms = 3692 samples @ 16kHz -> 28 blocks of 128 samples
+        for (int ch = 0; ch < 4; ch++) {
+            float fb = chords[ch][0], fp1 = chords[ch][1], fp2 = chords[ch][2], fvx = chords[ch][3];
+            for (int step = 0; step < 8; step++) {
+                uint8_t hit = brk[step];
+                for (int blk = 0; blk < 14; blk++) {
+                    float t_step = (float)(blk * 128) / (14.0f * 128.0f);
+                    for (int i = 0; i < 128; i++) {
+                        float t = t_step + (float)i / (14.0f * 128.0f);
+                        // Detuned Reese bass (two saw/sine oscillators +0.8% / -0.8%)
+                        ph_b1 += (6.2831853f * fb * 0.994f) / 16000.0f;
+                        ph_b2 += (6.2831853f * fb * 1.006f) / 16000.0f;
+                        ph_p1 += (6.2831853f * fp1) / 16000.0f;
+                        ph_p2 += (6.2831853f * fp2) / 16000.0f;
+                        ph_vx += (6.2831853f * fvx) / 16000.0f;
+                        if (ph_b1 > 6.2831853f) ph_b1 -= 6.2831853f;
+                        if (ph_b2 > 6.2831853f) ph_b2 -= 6.2831853f;
+                        if (ph_p1 > 6.2831853f) ph_p1 -= 6.2831853f;
+                        if (ph_p2 > 6.2831853f) ph_p2 -= 6.2831853f;
+                        if (ph_vx > 6.2831853f) ph_vx -= 6.2831853f;
+
+                        float reese = 0.38f * tanhf(1.6f * (sinf(ph_b1) + sinf(ph_b2)));
+                        float pad   = 0.24f * (sinf(ph_p1) + 0.7f * sinf(ph_p2));
+                        float vox_env = (step == 0 || step == 3 || step == 6) ? (0.5f - 0.5f * cosf(6.2831853f * t)) : 0.15f;
+                        float vox   = 0.22f * sinf(ph_vx) * vox_env;
+
+                        // Breakbeat percussion transient
+                        float drum = 0.0f;
+                        if (hit == 1 && t < 0.45f) { // 909/Break Kick pitch drop
+                            float fk = 52.0f + 110.0f * (1.0f - t * 2.2f);
+                            ph_k += (6.2831853f * fk) / 16000.0f;
+                            drum = 0.55f * sinf(ph_k) * (1.0f - t * 2.2f);
+                        } else if (hit == 2 && t < 0.55f) { // Breakbeat Snare
+                            lfsr ^= lfsr << 13; lfsr ^= lfsr >> 17; lfsr ^= lfsr << 5;
+                            float nz = ((float)(int16_t)(lfsr & 0xFFFF) / 32768.0f);
+                            drum = (0.35f * nz + 0.20f * sinf(ph_p1 * 1.1f)) * (1.0f - t * 1.8f);
+                        } else if (hit == 3 && t < 0.20f) { // Crisp Hat
+                            lfsr ^= lfsr << 13; lfsr ^= lfsr >> 17; lfsr ^= lfsr << 5;
+                            float nz = ((float)(int16_t)(lfsr & 0xFFFF) / 32768.0f);
+                            drum = 0.14f * nz * (1.0f - t * 5.0f);
+                        }
+
+                        float mix = tanhf((reese + pad + vox + drum) * 1.15f);
+                        int16_t s = (int16_t)(mix * 6200.0f);
+                        stereo_buf[i * 2]     = s;
+                        stereo_buf[i * 2 + 1] = s;
+                    }
+                    size_t written = 0;
+                    i2s_write(I2S_NUM_0, stereo_buf, sizeof(stereo_buf), &written, 20);
+                }
+            }
+        }
+    }
+    digitalWrite(PIN_SPEAKER_EN, LOW);
 }
 
 // ============================================================

@@ -395,7 +395,7 @@ static int      g_s3_scan_ch     = 1;
 static bool     g_s3_mesh_slot   = true;
 static bool     g_s3_hopping     = true;
 static uint8_t  g_s3_active_tab  = 0;   // 0=ZEN, 1=RADIO, 2=802.11, 3=NAND, 4=QWAVE
-static int      g_s3_track_idx   = 7;   // Default #08: Golden Ratio 432xPhi
+static int      g_s3_track_idx   = 17;  // Default #18: GLUE — BICEP (UK Breakbeat, Cm, 130 BPM)
 static bool     g_s3_playing     = true;
 static uint32_t g_s3_witness_seq = 1;
 static float    g_s3_orbit_angle = 0.0f;
@@ -408,16 +408,20 @@ static uint8_t  g_s3_mac[6]        = {0x80, 0xB5, 0x4E, 0xDB, 0x3B, 0xC4};
 static TernarySeamBuffer g_s3_seam_buf;
 static TernaryMatrix     g_s3_seam_mat;
 
-// Waveform & Ultrawhale NAND Ring State
+// Waveform & Ultrawhale NAND Ring State (Discrete Trits + Continuous Analog-Filtered Anti-Clip Wave)
 static float    g_s3_wave_hist[S3_WAVE_HIST];
+static float    g_s3_nand_hist[S3_WAVE_HIST];
 static uint8_t  g_s3_wave_head = 0;
-static int8_t   g_s3_nand_ring[7] = {+1, -1, 0, +1, -1, +1, 0};
-static uint32_t g_s3_nand_cycles  = 0;
-static int8_t   g_s3_eq_trits[8]  = {+1, +1, 0, +1, 0, -1, +1, 0};
-static uint8_t  g_s3_eq_bars[8]   = {78, 86, 62, 91, 54, 42, 74, 60};
+static int8_t   g_s3_nand_ring[7]   = {+1, -1, 0, +1, -1, +1, 0};
+static float    g_s3_nand_analog[7] = {+0.75f, -0.75f, 0.0f, +0.75f, -0.75f, +0.75f, 0.0f};
+static float    g_s3_smooth_rssi    = -62.0f;
+static float    g_s3_smooth_type    = 0.0f;
+static uint32_t g_s3_nand_cycles    = 0;
+static int8_t   g_s3_eq_trits[8]    = {+1, +1, 0, +1, 0, -1, +1, 0};
+static uint8_t  g_s3_eq_bars[8]     = {78, 86, 62, 91, 54, 42, 74, 60};
 static int16_t  g_s3_lissa_x[S3_LISSA_PTS];
 static int16_t  g_s3_lissa_y[S3_LISSA_PTS];
-static float    g_s3_phase        = 0.0f;
+static float    g_s3_phase          = 0.0f;
 
 // ============================================================
 // Triad Node Auto-Identification & ESP-NOW Mesh
@@ -473,6 +477,8 @@ static uint8_t s3_triad_online_count() {
     return cnt;
 }
 
+static void net_on_espnow_twif(const uint8_t* data, int len);
+
 #if defined(ESP_IDF_VERSION) && (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0))
 static void s3_espnow_recv_cb(const esp_now_recv_info_t* recv_info, const uint8_t* data, int len) {
     const uint8_t* src_mac = recv_info ? recv_info->src_addr : nullptr;
@@ -482,6 +488,12 @@ static void s3_espnow_recv_cb(const uint8_t* mac_addr, const uint8_t* data, int 
 #endif
     if (!data || len < 8) return;
     if (src_mac && memcmp(src_mac, g_s3_mac, 6) == 0) return;
+
+    // 0. Accept "TWIF" Triad Wi-Fi & OTA Share Capsule from sibling board
+    if (data[0] == 'T' && data[1] == 'W' && data[2] == 'I' && data[3] == 'F') {
+        net_on_espnow_twif(data, len);
+        return;
+    }
 
     // 1. Accept 8..64-byte `baye-rust` BayeCapsule ("BC") from pure-#![no_std]-Rust sibling watches & SUN:TDECK!
     if (data[0] == 'B' && data[1] == 'C') {
@@ -799,6 +811,8 @@ static void s3_step_physics() {
     }
 
     // 1. Step 7-stage cross-coupled ternary NAND ring oscillator in #![no_std] Rust coupled to live Triad peers
+    //    Discrete trits {-1, 0, +1} drive logic; continuous RC-filtered soft-NAND tanhf() drives
+    //    g_s3_nand_analog[7] & g_s3_nand_hist so the NAND waveform is smooth and never rail-clipped!
     int8_t peer_sum = 0;
     for (int i = 0; i < 3; i++) {
         if (g_triad_nodes[i].ttl_q8 > 0) peer_sum += g_triad_nodes[i].nand_trit;
@@ -809,13 +823,31 @@ static void s3_step_physics() {
     rust_step_watch_wave_pool_64(NULL, NULL, 248, g_s3_nand_ring, combined);
     g_s3_nand_cycles += 7;
 
-    // 2. Step AxiomQuant Sine Kernel K(u) = sin(pi*u)/(pi*u)
+    // Continuous analog soft-NAND ring (RC-filtered tanhf(-min(a,b)) with harmonic phase)
+    float comb_analog = tanhf(0.45f * (float)(imu_mod + rf_mod + peer_sum) + 0.30f * sinf(g_s3_phase * 0.7f));
+    float prev_a6     = g_s3_nand_analog[6];
+    float target0     = tanhf(-1.35f * fminf(prev_a6, comb_analog) + 0.35f * sinf(g_s3_phase));
+    float nand_mix    = 0.0f;
+    for (int i = 6; i >= 1; i--) {
+        float fb_a = (i == 3) ? g_s3_nand_analog[0] : g_s3_nand_analog[(i + 5) % 7];
+        float raw_i = tanhf(-1.35f * fminf(g_s3_nand_analog[i - 1], fb_a) + 0.32f * sinf(g_s3_phase + (float)i * 0.8975979f));
+        g_s3_nand_analog[i] += 0.24f * (raw_i - g_s3_nand_analog[i]);
+        nand_mix += g_s3_nand_analog[i] * ((i & 1) ? -0.18f : 0.22f);
+    }
+    g_s3_nand_analog[0] += 0.24f * (target0 - g_s3_nand_analog[0]);
+    nand_mix += g_s3_nand_analog[0] * 0.45f;
+    g_s3_nand_hist[g_s3_wave_head] = tanhf(nand_mix * 1.25f + 0.28f * sinf(g_s3_phase * 1.618f)) * 0.88f;
+
+    // 2. Step AxiomQuant Sine Kernel K(u) = sin(pi*u)/(pi*u) with EMA-smoothed RSSI & frame-type phase
     g_s3_phase += 0.14f;
     g_s3_orbit_angle += 0.045f + g_imu.sickness * 0.08f;
-    float rssi_u = normalize_rssi(g_s3_last_rssi) * 2.4f;
-    float k_val  = sine_kernel(rssi_u + 0.35f * sinf(g_s3_phase));
-    float carrier = sinf(g_s3_phase * 2.2f + (float)g_s3_last_type * 0.8f) * k_val;
-    g_s3_wave_hist[g_s3_wave_head] = carrier;
+    g_s3_smooth_rssi += 0.12f * ((float)g_s3_last_rssi - g_s3_smooth_rssi);
+    g_s3_smooth_type += 0.08f * ((float)g_s3_last_type - g_s3_smooth_type);
+    float rssi_u  = normalize_rssi((int8_t)g_s3_smooth_rssi) * 2.2f;
+    float k_val   = sine_kernel(rssi_u + 0.35f * sinf(g_s3_phase));
+    float carrier = (0.72f * sinf(g_s3_phase * 1.85f + g_s3_smooth_type * 0.65f)
+                   + 0.28f * g_s3_nand_hist[g_s3_wave_head]) * (0.35f + 0.65f * k_val);
+    g_s3_wave_hist[g_s3_wave_head] = tanhf(carrier * 1.15f) * 0.90f;
     g_s3_wave_head = (g_s3_wave_head + 1) % S3_WAVE_HIST;
 
     // 3. Step 64x64 2D Wave Pool with active Triad nodes + MarineSense O(1) Salience
@@ -1409,8 +1441,15 @@ static void s3_render_tab_wifi(S3Canvas& c) {
         int idx1 = (g_s3_wave_head + i + 1) % S3_WAVE_HIST;
         int x0 = 18 + (i * wave_w) / (S3_WAVE_HIST - 1);
         int x1 = 18 + ((i + 1) * wave_w) / (S3_WAVE_HIST - 1);
-        int y0 = wave_cy - (int)(g_s3_wave_hist[idx0] * 32.0f);
-        int y1 = wave_cy - (int)(g_s3_wave_hist[idx1] * 32.0f);
+        float v0 = g_s3_wave_hist[idx0];
+        float v1 = g_s3_wave_hist[idx1];
+        float n0 = g_s3_nand_hist[idx0];
+        float n1 = g_s3_nand_hist[idx1];
+        int ny0 = constrain(wave_cy - (int)(n0 * 26.0f), 194, 262);
+        int ny1 = constrain(wave_cy - (int)(n1 * 26.0f), 194, 262);
+        c.draw_line(x0, ny0, x1, ny1, COL_CYAN, 1);
+        int y0 = constrain(wave_cy - (int)(v0 * 28.0f), 194, 262);
+        int y1 = constrain(wave_cy - (int)(v1 * 28.0f), 194, 262);
         c.draw_line(x0, y0, x1, y1, COL_MINT, 2);
     }
 
@@ -1483,17 +1522,34 @@ static void s3_render_tab_nand(S3Canvas& c) {
         c.draw_text_centered(gx + g_bw / 2, gy + 7, glbl, COL_SUBTEXT, 1);
 
         char tstr[4] = {s3_trit_char(st), '\0'};
-        c.draw_text_centered(gx + g_bw / 2, gy + 21, tstr, col, 2);
+        c.draw_text_centered(gx + g_bw / 2, gy + 19, tstr, col, 2);
+
+        // Smooth analog level indicator bar inside each NAND stage card
+        int bar_w = (int)((g_s3_nand_analog[i] + 1.0f) * 0.5f * (float)(g_bw - 8));
+        bar_w = constrain(bar_w, 2, g_bw - 8);
+        c.fill_rect(gx + 4, gy + 40, bar_w, 4, COL_CYAN);
 
         if (i < 6) {
             c.draw_hline(gx + g_bw, gy + 24, 6, COL_CYAN);
         }
     }
+    // Render continuous unclipped analog NAND ring waveform across bottom of card
+    int nw_cy = 138;
+    int nw_w  = cw - 24;
+    c.draw_hline(18, nw_cy, nw_w, COL_GRID);
+    for (int i = 0; i < S3_WAVE_HIST - 1; i++) {
+        int idx0 = (g_s3_wave_head + i) % S3_WAVE_HIST;
+        int idx1 = (g_s3_wave_head + i + 1) % S3_WAVE_HIST;
+        int x0 = 18 + (i * nw_w) / (S3_WAVE_HIST - 1);
+        int x1 = 18 + ((i + 1) * nw_w) / (S3_WAVE_HIST - 1);
+        int y0 = constrain(nw_cy - (int)(g_s3_nand_hist[idx0] * 14.0f), 121, 155);
+        int y1 = constrain(nw_cy - (int)(g_s3_nand_hist[idx1] * 14.0f), 121, 155);
+        c.draw_line(x0, y0, x1, y1, COL_MINT, 2);
+    }
     char cyc_buf[64];
-    snprintf(cyc_buf, sizeof(cyc_buf), "CYCLES: %lu  HF: peetpedro/ultrawhale-oscillator",
+    snprintf(cyc_buf, sizeof(cyc_buf), "SMOOTH ANALOG NAND  CYC:%lu",
              (unsigned long)g_s3_nand_cycles);
-    c.draw_text(18, 128, cyc_buf, COL_MINT, 1);
-    c.draw_text(18, 142, "COUPLED: 3-NODE TRIAD + 802.11 RF + QMI8658 6-AXIS IMU", COL_DIM, 1);
+    c.draw_text_right(W - 16, 53, cyc_buf, COL_MINT, 1);
 
     c.fill_card(8, 168, cw, 128, COL_BG_ELEV, COL_CYAN);
     c.draw_text(18, 175, "2D LISSAJOUS PHASE PORTRAIT (TILT BOARD)", COL_CYAN, 1);
@@ -2160,6 +2216,21 @@ static void s3_handle_serial(const char* line) {
         net_host_set(line + 5);
     } else if (strncasecmp(line, "wifi", 4) == 0 && (line[4] == 0 || line[4] == 0x20)) {
         net_command(line + 4);
+    } else if (strcasecmp(line, "SHARE") == 0 || strcasecmp(line, "WIFISHARE") == 0) {
+        net_share_wifi_espnow(false);
+    } else if (strncasecmp(line, "ota", 3) == 0 && (line[3] == 0 || line[3] == 0x20)) {
+        const char* arg = line + 3;
+        while (*arg == ' ') arg++;
+        if (strcasecmp(arg, "TRIAD") == 0 || strcasecmp(arg, "ALL") == 0 || strcasecmp(arg, "SHARE") == 0) {
+            net_share_wifi_espnow(true);
+            net_ota_check_and_update(nullptr, true);
+        } else if (*arg) {
+            net_ota_check_and_update(arg, true);
+        } else {
+            net_ota_check_and_update(nullptr, true);
+        }
+    } else if (strncasecmp(line, "ble", 3) == 0 && (line[3] == 0 || line[3] == 0x20)) {
+        net_ble_start();
     } else if (strncasecmp(line, "time ", 5) == 0) {
         learn_set_time(line + 5);
     } else if (strncasecmp(line, "corpus ", 7) == 0) {
@@ -2246,6 +2317,17 @@ static void s3_handle_serial(const char* line) {
         Serial.printf("# TTS|{\"node\":\"%s\",\"vertex\":\"%s\",\"freq_hz\":%u,\"trit\":%d,\"text\":\"%s\",\"count\":%lu,\"hearts\":\"{<3,<3,<3}+1\"}\n",
                       g_medusa_node, g_medusa_vertex_json, (unsigned)g_medusa_freq_hz,
                       (int)g_triad_self_pole, g_tts_last_text, (unsigned long)g_tts_speak_count);
+    } else if (strcasecmp(line, "BICEP") == 0 || strcasecmp(line, "GLUE") == 0 ||
+               strcasecmp(line, "BICEP GLUE") == 0) {
+        g_s3_track_idx  = 17; // #18: GLUE — BICEP (UK Breakbeat, Cm, 130 BPM)
+        g_s3_playing    = true;
+        g_s3_active_tab = 1;  // Switch to RADIO / 8-Band Ternary EQ
+        s3_wave_pool_splash(32, 32, 9000, 7);
+        s3_espnow_wake_siblings(32, 32, 9000);
+        s3_emit_track_event();
+        s3_es8311_play_bicep_glue();
+        Serial.printf("# BICEP|{\"track\":\"GLUE\",\"artist\":\"BICEP\",\"genre\":\"UK Breakbeat\",\"key\":\"Cm\",\"bpm\":130,\"idx\":18,\"node\":\"%s\",\"triad_online\":%u}\n",
+                      g_medusa_node, (unsigned)s3_triad_online_count());
     } else if (strcasecmp(line, "RIVA") == 0 || strcasecmp(line, "LULLABY") == 0) {
         g_s3_track_idx = 26; // #27: RIVA · 1-Bit River (Lullaby)
         g_s3_playing   = true;
@@ -2375,6 +2457,7 @@ static void s3_amoled_setup() {
                   g_s3_mac[3], g_s3_mac[4], g_s3_mac[5]);
     learn_load();
     net_load();
+    net_ble_start();
     s3_emit_medusa_json();
     s3_emit_viz_line();
     s3_emit_riva_line();
@@ -2461,6 +2544,14 @@ static void s3_amoled_loop() {
 
     learn_tick(now);
     net_tick(now);
+    if (g_ble_cmd_pending) {
+        g_ble_cmd_pending = false;
+        char ble_line[128];
+        strncpy(ble_line, g_ble_cmd_buf, sizeof(ble_line) - 1);
+        ble_line[sizeof(ble_line) - 1] = '\0';
+        Serial.printf("# BLE_RX|{\"node\":\"%s\",\"cmd\":\"%s\"}\n", g_medusa_node, ble_line);
+        s3_handle_serial(ble_line);
+    }
 
     // oxi-phoenix: Saving/Critical slow the render loop (frame_ms); otherwise full 40 fps (25 ms).
     const unsigned long frame_period =
