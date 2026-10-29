@@ -1644,8 +1644,8 @@ static void s3_render_tab_qwave(S3Canvas& c) {
     int slot_y = 286;
     int slot_h = (H - 56) - slot_y;
     c.fill_card(8, slot_y, cw, slot_h, COL_BG_ELEV, COL_MINT);
-    c.draw_text(18, slot_y + 7, "ULTRA-OMNI-GAIA-EVOLVE ^^ <3<3 RIVA", COL_MINT, 1);
-    c.draw_text(18, slot_y + 22, "ACTIVE : " FLUGOS_FULL_VERSION, COL_TEXT, 1);
+    c.draw_text(18, slot_y + 7, "UPZ 64B@0x62 + ALEXAI b1.58 + AURORA MEM|8", COL_MINT, 1);
+    c.draw_text(18, slot_y + 22, "WITL:0xA1 MANTRA:0xF3 " FLUGOS_FULL_VERSION, COL_TEXT, 1);
 
     int btn_y = slot_y + slot_h - 34;
     int bw    = (cw - 28) / 2;
@@ -2079,7 +2079,7 @@ static void s3_emit_medusa_json() {
                   "\"tts_text\":\"%s\",\"tts_count\":%lu,"
                   "\"freq_hz\":%u,\"trit\":%d,\"persona\":\"%s\","
                   "\"seq\":%lu,\"networks\":%u,\"mean_rssi\":%d,"
-                  "\"entropy_pq\":\"%ld/%ld\",\"coherence_pq\":\"%ld/%ld\",\"trits\":\"%s\","
+                  "\"entropy_bits\":%.4f,\"entropy_pq\":\"%ld/%ld\",\"coherence_pq\":\"%ld/%ld\",\"trits\":\"%s\","
                   "\"salience\":%u,\"reynolds\":%u,\"anicca_ttl\":[%u,%u,%u],"
                   "\"track_idx\":%d,\"track\":\"%s\",\"artist\":\"%s\",\"bpm\":%u,"
                   "\"free_heap\":%lu,\"uptime_ms\":%lu,\"mode\":\"PASSIVE_STA_ONLY\"}\n",
@@ -2089,11 +2089,39 @@ static void s3_emit_medusa_json() {
                   g_tts_last_text, (unsigned long)g_tts_speak_count,
                   (unsigned)g_medusa_freq_hz, (int)g_triad_self_pole, g_triad_persona,
                   (unsigned long)g_medusa_scan_seq, (unsigned)n_ap, (int)g_medusa_mean_rssi,
-                  (long)entP, (long)entQ, (long)cohP, (long)cohQ, g_medusa_trits,
+                  g_medusa_entropy, (long)entP, (long)entQ, (long)cohP, (long)cohQ, g_medusa_trits,
                   g_ms_mean_salience, g_ms_reynolds,
                   g_triad_nodes[0].ttl_q8, g_triad_nodes[1].ttl_q8, g_triad_nodes[2].ttl_q8,
                   g_s3_track_idx + 1, t->title, t->artist, t->bpm,
                   (unsigned long)ESP.getFreeHeap(), (unsigned long)millis());
+
+    uint16_t seal16 = (uint16_t)((g_kompress_wupz_u64 ^ (uint64_t)entP ^ (uint64_t)g_s3_total_pkts) & 0xFFFFu);
+    int32_t salP = 0, salQ = 1;
+    rust_reduce_rational_pq((int32_t)g_ms_mean_salience, 100, &salP, &salQ);
+    char spqt6[7];
+    memcpy(spqt6, g_kompress_hex, 6);
+    spqt6[6] = '\0';
+    Serial.printf("# UPZ|{\"node\":\"%s\",\"version\":\"0.5.0\",\"gate\":\"0x62\",\"abi\":1,\"qt\":\"0x55\","
+                  "\"lanes\":\"8/8\",\"lanes_hex\":\"0x0808\",\"raw_fold\":\"0x%016llx\","
+                  "\"bfp64_pos\":\"0x%016llx\",\"bfp64_neg\":\"0x%016llx\",\"ratio_pq\":\"8/1\","
+                  "\"spqt_hex\":\"%s\",\"witl_spqt\":\"0xa1\",\"galactic_mantra_fold\":\"0xf3\","
+                  "\"ctx_spqt\":\"0x50\",\"seal16\":\"0x%04x\",\"wire_bytes\":64}\n",
+                  g_medusa_node, (unsigned long long)g_kompress_wupz_u64,
+                  (unsigned long long)g_kompress_pos_u64, (unsigned long long)g_kompress_neg_u64,
+                  spqt6, (unsigned)seal16);
+    Serial.printf("# ALEXAI|{\"node\":\"%s\",\"model\":\"GAIA-MLX-QUANT-b1.58\",\"bits_per_trit\":\"1.585\","
+                  "\"layers\":[\"Ananke\",\"Chaos\",\"Zephyrus\",\"Aphrodite\"],\"scale_pq\":\"%ld/%ld\","
+                  "\"b158_hex\":\"%s\",\"trits\":\"%s\",\"fold\":\"0x%016llx\"}\n",
+                  g_medusa_node, (long)entP, (long)entQ, spqt6, g_medusa_trits,
+                  (unsigned long long)(g_kompress_wupz_u64 ^ 0xe1034e575c371a00ULL));
+    Serial.printf("# AURORA|{\"node\":\"%s\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\","
+                  "\"organ\":\"MEM|8\",\"carrier_hz\":%u,\"hamilton_guard\":\"OK\",\"free_heap\":%lu,"
+                  "\"salience_pq\":\"%ld/%ld\",\"entropy_pq\":\"%ld/%ld\",\"phase\":%u,\"trit\":%d,"
+                  "\"wire_seal16\":\"0x%04x\"}\n",
+                  g_medusa_node, g_s3_mac[0], g_s3_mac[1], g_s3_mac[2], g_s3_mac[3], g_s3_mac[4], g_s3_mac[5],
+                  (unsigned)g_medusa_freq_hz, (unsigned long)ESP.getFreeHeap(),
+                  (long)salP, (long)salQ, (long)entP, (long)entQ,
+                  (unsigned)(g_medusa_scan_seq & 3), (int)g_triad_self_pole, (unsigned)seal16);
 }
 
 static void s3_emit_medusa_scan() {
@@ -2508,10 +2536,12 @@ static void s3_amoled_loop() {
         s3_espnow_broadcast(32, 32, 0);
     }
 
-    // RIVA & Pranayama 4s breath pulse: update pranayama + sweep wake-up capsule across Ch 1..13
+    // RIVA & Pranayama 4s breath pulse: update pranayama + emit JSON/UPZ/ALEXAI/AURORA + sweep wake-up capsule
     if (now - last_riva_ms >= 4000) {
         last_riva_ms = now;
+        g_medusa_scan_seq++;
         pranayama_tick(now, g_imu.sickness, g_ms_mean_salience, s3_triad_online_count());
+        s3_emit_medusa_json();
         if (s3_triad_online_count() < 2 && g_ph_budget.mode != PH_CRITICAL) {
             s3_espnow_wake_siblings(32, 32, 4200);
         }

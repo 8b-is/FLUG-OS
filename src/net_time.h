@@ -162,17 +162,22 @@ static bool net_try_join_one(const char* ssid, const char* pass, unsigned long w
     return false;
 }
 
-static bool net_connect_best() {
+static bool net_connect_best(bool allow_blind = false) {
     // 1. First try any known AP from FLUG_WIFI_APS that our passive 802.11 scanner has already heard!
     for (int i = 0; i < FLUG_NUM_WIFI_APS; i++) {
         if (net_seen_ssid_rssi(FLUG_WIFI_APS[i].ssid) != 0) {
-            if (net_try_join_one(FLUG_WIFI_APS[i].ssid, FLUG_WIFI_APS[i].pass, 7000UL)) return true;
+            if (net_try_join_one(FLUG_WIFI_APS[i].ssid, FLUG_WIFI_APS[i].pass, 3500UL)) return true;
         }
     }
-    // 2. Always try primary laptop Wi-Fi (`Rakuten-4CE2`) and configured NVS SSID
-    if (net_try_join_one(FLUG_WIFI_APS[0].ssid, FLUG_WIFI_APS[0].pass, 7000UL)) return true;
+    if (g_net_ssid[0] && net_seen_ssid_rssi(g_net_ssid) != 0) {
+        if (net_try_join_one(g_net_ssid, g_net_pass, 3500UL)) return true;
+    }
+    // Never block the 40 FPS AMOLED HUD with blind Wi-Fi joins unless explicitly requested via CLI/BLE!
+    if (!allow_blind) return false;
+    // 2. Explicit manual command: try primary laptop Wi-Fi (`Rakuten-4CE2`) and configured NVS SSID
+    if (net_try_join_one(FLUG_WIFI_APS[0].ssid, FLUG_WIFI_APS[0].pass, 4500UL)) return true;
     if (g_net_ssid[0] && strcmp(g_net_ssid, FLUG_WIFI_APS[0].ssid) != 0) {
-        if (net_try_join_one(g_net_ssid, g_net_pass, 6000UL)) return true;
+        if (net_try_join_one(g_net_ssid, g_net_pass, 4500UL)) return true;
     }
     return false;
 }
@@ -341,16 +346,23 @@ static bool net_ota_check_and_update(const char* custom_url = nullptr, bool forc
     return false;
 }
 
-static void net_sync() {
+static void net_sync(bool allow_blind = false) {
     g_net_last_try = millis();
     g_net_ever = true;
 
-    if (net_connect_best()) {
+    if (!allow_blind && net_seen_rssi() == 0) {
+        g_net_last_ok = 0;
+        g_net_last_ip[0] = '\0';
+        net_emit_status("offline mesh mode (fast)");
+        return;
+    }
+
+    if (net_connect_best(allow_blind)) {
         strncpy(g_net_last_ip, WiFi.localIP().toString().c_str(), sizeof(g_net_last_ip) - 1);
         configTime(0, 0, "pool.ntp.org", "time.google.com", "time.cloudflare.com");
         time_t now = 0;
         unsigned long t1 = millis();
-        while ((now = time(nullptr)) < 1700000000 && millis() - t1 < 6000UL) delay(80);
+        while ((now = time(nullptr)) < 1700000000 && millis() - t1 < 2500UL) delay(60);
         if (now >= 1700000000) {
             learn_clock_set((long long)now);
             g_net_last_ok = 1;
@@ -387,9 +399,9 @@ static void net_host_set(const char* a) {   // HOST <ip> <port> <token>
 }
 
 static void net_push_say(const char* say, uint32_t seq) {
-    if (!g_net_ssid[0] || !g_host_ip[0] || !g_host_port) return;
+    if (!g_net_ssid[0] || !g_host_ip[0] || !g_host_port || net_seen_rssi() == 0) return;
     int code = -1;
-    if (net_connect_best()) {
+    if (net_connect_best(false)) {
         HTTPClient h;
         String url = String("http://") + g_host_ip + ":" + String(g_host_port) + "/board/say";
         if (h.begin(url)) {
@@ -475,7 +487,7 @@ static void net_ble_start() {
 static void net_command(const char* a) {
     while (*a == ' ') a++;
     if (!*a) { net_emit_status("status"); return; }
-    if (strcasecmp(a, "SYNC") == 0) { net_sync(); return; }
+    if (strcasecmp(a, "SYNC") == 0) { net_sync(true); return; }
     if (strcasecmp(a, "SHARE") == 0) { net_share_wifi_espnow(false); return; }
     if (strcasecmp(a, "SHARE OTA") == 0) { net_share_wifi_espnow(true); return; }
     if (strcasecmp(a, "CLEAR") == 0) { g_net_ssid[0] = g_net_pass[0] = '\0'; net_store(); net_emit_status("cleared"); return; }
@@ -489,7 +501,7 @@ static void net_command(const char* a) {
     net_store();
     // Automatically share the newly provisioned Wi-Fi credentials with the other 2 Triad boards over ESP-NOW!
     net_share_wifi_espnow(false);
-    net_sync();
+    net_sync(true);
 }
 
 static void net_tick(unsigned long now) {
