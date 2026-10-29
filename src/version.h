@@ -10,14 +10,14 @@
 #define FLUGOS_VERSION_H
 
 #define FLUGOS_VERSION_MAJOR  1
-#define FLUGOS_VERSION_MINOR  8
+#define FLUGOS_VERSION_MINOR  9
 #define FLUGOS_VERSION_PATCH  0
-#define FLUGOS_VERSION_STR    "1.8.0"
-#define FLUGOS_VERSION_STRING "1.8.0"
+#define FLUGOS_VERSION_STR    "1.9.0"
+#define FLUGOS_VERSION_STRING "1.9.0"
 
 /* Build metadata — populated by PlatformIO build_flags if set */
 #ifndef FLUGOS_COMMIT
-#define FLUGOS_COMMIT         "omni-upz-alexai-aurora"
+#define FLUGOS_COMMIT         "omni-3node-tdeck-upz-alexai-aurora"
 #endif
 
 #define FLUGOS_FULL_VERSION   "v" FLUGOS_VERSION_STR "+" FLUGOS_COMMIT

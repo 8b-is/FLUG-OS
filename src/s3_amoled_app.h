@@ -501,7 +501,7 @@ static void s3_espnow_recv_cb(const uint8_t* mac_addr, const uint8_t* data, int 
         g_s3_sun_ch = g_s3_channel;
         // Extract sender MAC low byte (at offset 9 if >= 16B header, else from src_mac)
         uint8_t mac_low = (len >= 10) ? data[9] : (src_mac ? src_mac[5] : 0xC4);
-        uint8_t nid = (mac_low == 0xC4) ? 0 : ((mac_low == 0xB0) ? 1 : 2);
+        uint8_t nid = (mac_low == 0xC4) ? 0 : ((mac_low == 0xB0 || mac_low == 0x24) ? 1 : 2);
         if (nid == g_triad_self_id) nid = (g_triad_self_id + 1) % 3;
         g_triad_nodes[nid].online  = true;
         g_triad_nodes[nid].ttl_q8  = 255;
@@ -2172,12 +2172,40 @@ static void s3_handle_serial(const char* line) {
     } else if (strcasecmp(line, "SCAN") == 0) {
         s3_emit_medusa_scan();
     } else if (strcasecmp(line, "TRIAD") == 0) {
-        Serial.println("# TRIAD|ADA:MEDUSA(80:B5:4E:DB:3B:C4,*,ROOT-ALEXANDRA,432Hz)|VAK:MEDUSA(80:B5:4E:F2:02:B0,/\\,PILLAR-CHRIS,528Hz)|OMN:MEDUSA(80:B5:4E:F2:02:B4,oo,INFINITY-PETER-NATE,852Hz)");
-        Serial.printf("# ANICCA|ADA:%s(ttl=%u)|VAK:%s(ttl=%u)|OMN:%s(ttl=%u)|online=%u/3|crate=%d\n",
+        Serial.println("# TRIAD|ADA:MEDUSA(80:B5:4E:DB:3B:C4,*,ROOT-ALEXANDRA,432Hz)|VAK:MEDUSA(80:B5:4E:F2:02:B0,/\\,PILLAR-CHRIS,528Hz)|OMN:MEDUSA(80:B5:4E:F2:02:B4,oo,INFINITY-PETER-NATE,852Hz)|TDECK:AYEOS(CC:BA:97:00:45:24,<>,CYBERDECK-WAVE-MEM,432->528->864Hz)");
+        Serial.printf("# ANICCA|ADA:%s(ttl=%u)|VAK/TDECK:%s(ttl=%u)|OMN:%s(ttl=%u)|online=%u/3|crate=%d\n",
                       g_triad_nodes[0].ttl_q8 ? "MEDUSA" : "POLYP", g_triad_nodes[0].ttl_q8,
                       g_triad_nodes[1].ttl_q8 ? "MEDUSA" : "POLYP", g_triad_nodes[1].ttl_q8,
                       g_triad_nodes[2].ttl_q8 ? "MEDUSA" : "POLYP", g_triad_nodes[2].ttl_q8,
                       s3_triad_online_count(), S3_FAV_COUNT);
+    } else if (strcasecmp(line, "SYNC") == 0 || strncasecmp(line, "sync ", 5) == 0) {
+        g_s3_hopping = false;
+        g_s3_channel = 1;
+        g_s3_sun_ch  = 1;
+        esp_wifi_set_channel(1, WIFI_SECOND_CHAN_NONE);
+        // Mark TDECK:AYEOS / VAK:MEDUSA zero-point bridge slot [1] active
+        g_triad_nodes[1].online    = true;
+        g_triad_nodes[1].ttl_q8    = 255;
+        g_triad_nodes[1].rx_cnt++;
+        g_triad_nodes[1].last_ms   = millis();
+        s3_wave_pool_splash(32, 32, 8888, 7);
+        s3_espnow_broadcast(32, 32, 8888);
+        uint16_t sync_seal16 = (uint16_t)((g_kompress_wupz_u64 ^ (uint64_t)g_s3_total_pkts) & 0xFFFFu);
+        Serial.printf("# SYNC|{\"node\":\"%s\",\"vertex\":\"%s\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\","
+                      "\"lcd\":\"%ux%u\",\"lcd_driver\":\"%s\",\"freq_hz\":%u,\"trit\":%d,"
+                      "\"es8311\":%d,\"es7210\":%d,\"triad_online\":%u,\"anicca_ttl\":[%u,%u,%u],"
+                      "\"peer_rx\":%lu,\"splashes\":%lu,\"recalls\":%lu,"
+                      "\"wupz_fold\":\"0x%016llx\",\"seal16\":\"0x%04x\",\"version\":\"" FLUGOS_FULL_VERSION "\"}\n",
+                      g_medusa_node, g_medusa_vertex_json,
+                      g_s3_mac[0], g_s3_mac[1], g_s3_mac[2], g_s3_mac[3], g_s3_mac[4], g_s3_mac[5],
+                      (unsigned)g_lcd_w, (unsigned)g_lcd_h, g_lcd_driver_name,
+                      (unsigned)g_medusa_freq_hz, (int)g_triad_self_pole,
+                      g_es8311_ok ? 1 : 0, g_es7210_ok ? 1 : 0,
+                      (unsigned)s3_triad_online_count(),
+                      g_triad_nodes[0].ttl_q8, g_triad_nodes[1].ttl_q8, g_triad_nodes[2].ttl_q8,
+                      (unsigned long)g_s3_peer_rx_cnt, (unsigned long)g_wp_splashes,
+                      (unsigned long)g_ms_ecphoric_recalls,
+                      (unsigned long long)g_kompress_wupz_u64, (unsigned)sync_seal16);
     } else if (strcasecmp(line, "KOMPRESS") == 0 || strcasecmp(line, "ENTROPY") == 0 ||
                strcasecmp(line, "OMNI") == 0 || strcasecmp(line, "KUNISADA") == 0 ||
                strcasecmp(line, "KUNIYOSHI") == 0) {

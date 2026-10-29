@@ -126,7 +126,7 @@ static bool s3_i2c_write8(uint8_t addr, uint8_t reg, uint8_t val) {
 static bool s3_i2c_read_bytes(uint8_t addr, uint8_t reg, uint8_t* buf, size_t len) {
     Wire.beginTransmission(addr);
     Wire.write(reg);
-    if (Wire.endTransmission(false) != 0) return false;
+    if (Wire.endTransmission(true) != 0) return false;
     size_t got = Wire.requestFrom((int)addr, (int)len);
     if (got != len) return false;
     for (size_t i = 0; i < len; i++) {
