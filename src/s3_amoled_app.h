@@ -478,7 +478,7 @@ static uint8_t s3_triad_online_count() {
     return cnt;
 }
 
-static void net_on_espnow_twif(const uint8_t* data, int len);
+static void net_on_espnow_twif(const uint8_t* src_mac, const uint8_t* data, int len);
 static void memnet_on_espnow_rx(const uint8_t* data, int len, int8_t rssi);
 static void memnet_record_peer_rssi(uint8_t nid, int8_t rssi);
 
@@ -494,9 +494,9 @@ static void s3_espnow_recv_cb(const uint8_t* mac_addr, const uint8_t* data, int 
     if (!data || len < 8) return;
     if (src_mac && memcmp(src_mac, g_s3_mac, 6) == 0) return;
 
-    // 0. Accept "TWIF" Triad Wi-Fi & OTA Share Capsule from sibling board
+    // 0. Accept "TWIF" Triad Wi-Fi & OTA Share Capsule from trusted sibling board
     if (data[0] == 'T' && data[1] == 'W' && data[2] == 'I' && data[3] == 'F') {
-        net_on_espnow_twif(data, len);
+        net_on_espnow_twif(src_mac, data, len);
         return;
     }
 

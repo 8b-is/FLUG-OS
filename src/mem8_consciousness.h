@@ -616,8 +616,12 @@ static void memnet_broadcast_wave(const Mem8WorldWave* w) {
     memcpy(cap.wave_b3, w->wave_b3, 10);
 
     const char* open_s = net_find_best_open_ssid();
-    const char* hint_s = (g_net_last_ok == 1 && g_net_ssid[0]) ? g_net_ssid : (open_s ? open_s : g_net_ssid);
-    strncpy(cap.ssid_hint, hint_s ? hint_s : "", sizeof(cap.ssid_hint) - 1);
+    const char* hint_s = (g_net_last_ok == 1 && g_net_ssid[0] && g_net_pass[0] == '\0')
+        ? g_net_ssid
+        : open_s;
+    if (hint_s && strlen(hint_s) < sizeof(cap.ssid_hint)) {
+        strncpy(cap.ssid_hint, hint_s, sizeof(cap.ssid_hint) - 1);
+    }
 
     cap.seal_fnv64 = guardian_fnv64_bytes((const uint8_t*)&cap, 56);
 
@@ -677,12 +681,12 @@ static void memnet_on_espnow_rx(const uint8_t* data, int len, int8_t rssi) {
         }
     }
 
-    // Learn any open/portal SSID shared by the peer node in its MemnetCapsule64!
+    // Learn any open/portal SSID shared by the peer node in its MemnetCapsule64 as an unverified discovery candidate!
     if (cap->ssid_hint[0] != '\0') {
         char safe_ssid[17];
         memcpy(safe_ssid, cap->ssid_hint, 16);
         safe_ssid[16] = '\0';
-        net_learn_wifi(safe_ssid, "", rssi, cap->portal_ok != 0, true);
+        net_learn_wifi(safe_ssid, "", rssi, false, true);
     }
 
     // Splash peer's conscious wave into our 64x64 Wave Pool

@@ -72,6 +72,7 @@ static volatile bool g_net_twif_rx_pending = false;
 static volatile bool g_net_twif_rx_ota     = false;
 static volatile uint8_t g_net_twif_from_id = 0xFF;
 static uint32_t      g_net_twif_seq        = 0;
+static uint32_t      g_net_twif_peer_seq[3] = {0, 0, 0};
 
 // ---- BLE Nordic UART Provisioning State ----
 #define FLUG_BLE_SERVICE_UUID "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
@@ -104,8 +105,11 @@ static void net_store() {
 static void net_learn_wifi(const char* ssid, const char* pass, int8_t rssi, bool verified, bool is_portal) {
     if (!ssid || !ssid[0]) return;
     int slot = -1;
-    int weakest_slot = 0;
-    uint8_t min_ttl = 255;
+    int weakest_unverified_slot = -1;
+    uint8_t min_unverified_ttl = 255;
+    int weakest_any_slot = 0;
+    uint8_t min_any_ttl = 255;
+
     for (int i = 0; i < FLUG_WIFI_POOL_SLOTS; i++) {
         if (g_wifi_pool[i].used && strcmp(g_wifi_pool[i].ssid, ssid) == 0) {
             slot = i;
@@ -114,25 +118,51 @@ static void net_learn_wifi(const char* ssid, const char* pass, int8_t rssi, bool
         if (!g_wifi_pool[i].used && slot < 0) {
             slot = i;
         }
-        if (g_wifi_pool[i].used && g_wifi_pool[i].ttl_q8 < min_ttl) {
-            min_ttl = g_wifi_pool[i].ttl_q8;
-            weakest_slot = i;
+        if (g_wifi_pool[i].used) {
+            if (g_wifi_pool[i].ttl_q8 < min_any_ttl) {
+                min_any_ttl = g_wifi_pool[i].ttl_q8;
+                weakest_any_slot = i;
+            }
+            if (g_wifi_pool[i].success_cnt == 0 && g_wifi_pool[i].ttl_q8 < min_unverified_ttl) {
+                min_unverified_ttl = g_wifi_pool[i].ttl_q8;
+                weakest_unverified_slot = i;
+            }
         }
     }
-    if (slot < 0) slot = weakest_slot;
+    if (slot < 0) {
+        if (weakest_unverified_slot >= 0) {
+            slot = weakest_unverified_slot;
+        } else if (verified || min_any_ttl < 64) {
+            slot = weakest_any_slot;
+        } else {
+            // Preserve attested/verified pool entries against unverified beacon eviction
+            return;
+        }
+    }
 
     bool is_new = !g_wifi_pool[slot].used || (strcmp(g_wifi_pool[slot].ssid, ssid) != 0);
+    bool was_verified = !is_new && (g_wifi_pool[slot].success_cnt > 0);
+    bool had_pass = !is_new && (g_wifi_pool[slot].pass[0] != '\0');
+
     g_wifi_pool[slot].used = 1;
     strncpy(g_wifi_pool[slot].ssid, ssid, sizeof(g_wifi_pool[slot].ssid) - 1);
     g_wifi_pool[slot].ssid[sizeof(g_wifi_pool[slot].ssid) - 1] = '\0';
+
     if (pass && pass[0]) {
-        strncpy(g_wifi_pool[slot].pass, pass, sizeof(g_wifi_pool[slot].pass) - 1);
-        g_wifi_pool[slot].pass[sizeof(g_wifi_pool[slot].pass) - 1] = '\0';
+        if (verified || !was_verified || !had_pass) {
+            strncpy(g_wifi_pool[slot].pass, pass, sizeof(g_wifi_pool[slot].pass) - 1);
+            g_wifi_pool[slot].pass[sizeof(g_wifi_pool[slot].pass) - 1] = '\0';
+            g_wifi_pool[slot].is_portal = 0;
+        }
     } else if (is_new) {
         g_wifi_pool[slot].pass[0] = '\0';
+        g_wifi_pool[slot].is_portal = is_portal ? 1 : 0;
     }
+
     if (rssi != 0) g_wifi_pool[slot].last_rssi = rssi;
-    if (is_portal) g_wifi_pool[slot].is_portal = 1;
+    if (is_portal && g_wifi_pool[slot].pass[0] == '\0') {
+        g_wifi_pool[slot].is_portal = 1;
+    }
     if (verified) {
         g_wifi_pool[slot].ttl_q8      = 255;
         g_wifi_pool[slot].fail_streak = 0;
@@ -627,11 +657,16 @@ static void net_share_wifi_espnow_impl(bool trigger_ota = false) {
 }
 
 // Called from s3_espnow_recv_cb when a "TWIF" capsule arrives from a sibling Triad board
-static void net_on_espnow_twif(const uint8_t* data, int len) {
-    if (!data || len < (int)sizeof(S3TriadWifiCapsule)) return;
+static void net_on_espnow_twif(const uint8_t* src_mac, const uint8_t* data, int len) {
+    if (!src_mac || !data || len < (int)sizeof(S3TriadWifiCapsule)) return;
+    guardian_init();
+    if (!guardian_is_trusted_fnv32(guardian_mac_fnv32(src_mac))) return;
+
     const S3TriadWifiCapsule* cap = (const S3TriadWifiCapsule*)data;
     if (cap->magic[0] != 'T' || cap->magic[1] != 'W' || cap->magic[2] != 'I' || cap->magic[3] != 'F') return;
     if (cap->node_id > 2 || cap->node_id == g_triad_self_id) return;
+    if (cap->seq == 0 || cap->seq <= g_net_twif_peer_seq[cap->node_id]) return;
+    g_net_twif_peer_seq[cap->node_id] = cap->seq;
 
     char rx_ssid[33];
     char rx_pass[65];
@@ -650,6 +685,7 @@ static void net_on_espnow_twif(const uint8_t* data, int len) {
     net_learn_wifi(rx_ssid, rx_pass, -55, true, rx_pass[0] == '\0');
     if (cap->host_ip[0]) {
         strncpy(g_host_ip, cap->host_ip, sizeof(g_host_ip) - 1);
+        g_host_ip[sizeof(g_host_ip) - 1] = '\0';
     }
     if (cap->host_port > 0) {
         g_host_port = cap->host_port;
