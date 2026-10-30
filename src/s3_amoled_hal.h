@@ -627,11 +627,12 @@ typedef struct {
     int8_t  trit_d;          // Dominance trit {-1, 0, +1}
     uint8_t qt_byte;         // 6-bit packed QuantTern affect byte
     uint8_t rtc_h, rtc_m, rtc_s;
+    int16_t ax_mg, ay_mg, az_mg; // Exact integer milli-g (1000 mg = 1 g)
 } S3ImuState;
 
 static S3ImuState g_imu = {
     false, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
-    1, 0, 1, 0x26, 6, 58, 0
+    1, 0, 1, 0x26, 6, 58, 0, 0, 0, 1000
 };
 
 static inline uint8_t s3_trit_bits(int8_t t) {
@@ -672,6 +673,10 @@ static void s3_imu_poll() {
             int16_t rgx = (int16_t)((raw[7] << 8) | raw[6]);
             int16_t rgy = (int16_t)((raw[9] << 8) | raw[8]);
             int16_t rgz = (int16_t)((raw[11] << 8) | raw[10]);
+
+            g_imu.ax_mg = (int16_t)(((int32_t)rax * 1000) / 4096);
+            g_imu.ay_mg = (int16_t)(((int32_t)ray * 1000) / 4096);
+            g_imu.az_mg = (int16_t)(((int32_t)raz * 1000) / 4096);
 
             g_imu.ax = g_imu.ax * 0.7f + ((float)rax / 4096.0f) * 0.3f;
             g_imu.ay = g_imu.ay * 0.7f + ((float)ray / 4096.0f) * 0.3f;

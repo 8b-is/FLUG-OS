@@ -1924,6 +1924,7 @@ static void s3_handle_touch() {
 #include "learn_env.h"
 #include "net_time.h"
 #include "pranayama.h"
+#include "guardian_mesh.h"
 
 static const char* const S3_RIVA_LULLABY[10] = {
     "She blinks, and the sphere rocks.",
@@ -2426,6 +2427,8 @@ static void s3_handle_serial(const char* line) {
         pranayama_emit_json(g_medusa_node, g_engine_line, g_medusa_entropy, g_medusa_mean_rssi, s3_triad_online_count());
         s3_emit_riva_line();
         s3_emit_gaia_line();
+    } else if (guardian_handle_serial(line)) {
+        // Handled by Chiro Guardian Tamagotchi Safety Mesh (GUARDIAN, GUARDIAN STATUS, GUARDIAN SIM_SHADOW, GUARDIAN TRUST, GUARDIAN THOUGHT)
     }
 }
 
@@ -2514,10 +2517,12 @@ static void s3_amoled_setup() {
     learn_load();
     net_load();
     net_ble_start();
+    guardian_init();
     s3_emit_medusa_json();
     s3_emit_viz_line();
     s3_emit_riva_line();
     s3_emit_gaia_line();
+    guardian_emit_status();
 }
 
 static void s3_amoled_loop() {
@@ -2602,6 +2607,7 @@ static void s3_amoled_loop() {
 
     learn_tick(now);
     net_tick(now);
+    guardian_tick(now);
     if (g_ble_cmd_pending) {
         g_ble_cmd_pending = false;
         char ble_line[128];
@@ -2617,6 +2623,7 @@ static void s3_amoled_loop() {
     if (now - last_frame_ms >= frame_period) {
         last_frame_ms = now;
         s3_touch_poll();
+        if (g_touch.just_pressed) { g_guardian_soul.care_touches++; guardian_update_companion_soul(); }
         s3_imu_poll();
         s3_handle_touch();
         s3_step_physics();
