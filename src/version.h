@@ -1,5 +1,6 @@
 /*
  * FLUG-OS — Fluid Operating System {-1, 0, +1}
+ * (Hungarian "flúgos": "pixillated" or "nutty as a fruitcake" 😀)
  * Version header — single source of truth.
  *
  * Keep in sync with ROADMAP.md and the GitHub release tags.

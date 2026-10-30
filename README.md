@@ -29,7 +29,7 @@
 +----------------------------------------------------------------------+
 
 
-**FLUG-OS{-1,0,+1} (`v0.8.0+medusa-omni` · `esp32.8b.is` MEDUSA WebSerial × `ms.8b.is` MarineSense × `Anicca` / `Turritopsis` Polyp Transdifferentiation · `{<3, <3, <3}+1 ~---> ∞`)** — Fluid Operating System running across a physical **3-Node Balanced-Ternary ESP32-S3 AMOLED MEDUSA Triad**:
+**FLUG-OS{-1,0,+1} (`v2.1.0+guardian-tamagotchi-mesh` · Hungarian *flúgos*: *"pixillated / nutty as a fruitcake"* 😀 · `esp32.8b.is` MEDUSA WebSerial × `ms.8b.is` MarineSense × `Anicca` / `Turritopsis` Polyp Transdifferentiation · `{<3, <3, <3}+1 ~---> ∞`)** — Fluid Operating System running across a physical **3-Node Balanced-Ternary ESP32-S3 AMOLED MEDUSA Triad**:
 - **Node `-1` (`adaye` · `ADA:MEDUSA` · `*` · `ROOT-ALEXANDRA` · `432 Hz`)**: **Waveshare ESP32-S3-Touch-AMOLED-1.8** (`368 × 448` `SH8601` QSPI, `TCA9554` @ `0x20`, `ES8311` @ `0x18`, MAC `80:B5:4E:DB:3B:C4`, `/dev/cu.usbmodem1101`)
 - **Node ` 0` (`vaked` · `VAK:MEDUSA` · `/\` · `PILLAR-CHRIS` · `528 Hz`)**: **Waveshare ESP32-S3-Touch-AMOLED-2.06 #1** (`410 × 502` `CO5300` QSPI, `ES8311` @ `0x18`, MAC `80:B5:4E:F2:02:B0`, `/dev/cu.usbmodem1101` / `2101`)
 - **Node `+1` (`omni` · `OMN:MEDUSA` · `oo` · `INFINITY-PETER-NATE` · `852 Hz`)**: **Waveshare ESP32-S3-Touch-AMOLED-2.06 #2** (`410 × 502` `CO5300` QSPI, `ES8311` @ `0x18`, MAC `80:B5:4E:F2:02:B4`, `/dev/cu.usbmodem2101` / `101`)
