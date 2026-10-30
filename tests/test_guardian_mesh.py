@@ -122,11 +122,11 @@ class GuardianMeshTests(unittest.TestCase):
         self.assertIsNone(re.search(r"\b\d+\.\d+f?\b", code_only))
 
         ver_text = VERSION_H.read_text(encoding="utf-8")
-        self.assertIn('#define FLUGOS_VERSION_STR    "2.1.0"', ver_text)
-        self.assertIn('#define FLUGOS_COMMIT         "guardian-tamagotchi-mesh"', ver_text)
+        self.assertIn('#define FLUGOS_VERSION_STR    "2.2.0"', ver_text)
+        self.assertIn('#define FLUGOS_COMMIT         "omni-findme-rfid-ac-pomodoro-metro-jp"', ver_text)
 
         app_text = S3_APP_H.read_text(encoding="utf-8")
-        self.assertIn('#include "pranayama.h"\n#include "guardian_mesh.h"', app_text)
+        self.assertIn('#include "pranayama.h"\n#include "guardian_mesh.h"\n#include "omni_cockpit_v22.h"', app_text)
 
     def test_breadcrumb64_binary_layout_and_fnv64_chain(self):
         self.assertEqual(struct.calcsize(BREADCRUMB_FMT), 64)
