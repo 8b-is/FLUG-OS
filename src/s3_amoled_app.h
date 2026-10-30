@@ -326,6 +326,7 @@ static bool              g_s3_espnow_ok   = false;
 
 typedef struct {
     bool    used;
+    bool    is_open;
     uint8_t bssid[6];
     char    ssid[33];
     uint8_t ch;
@@ -478,13 +479,17 @@ static uint8_t s3_triad_online_count() {
 }
 
 static void net_on_espnow_twif(const uint8_t* data, int len);
+static void memnet_on_espnow_rx(const uint8_t* data, int len, int8_t rssi);
+static void memnet_record_peer_rssi(uint8_t nid, int8_t rssi);
 
 #if defined(ESP_IDF_VERSION) && (ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0))
 static void s3_espnow_recv_cb(const esp_now_recv_info_t* recv_info, const uint8_t* data, int len) {
     const uint8_t* src_mac = recv_info ? recv_info->src_addr : nullptr;
+    int8_t rx_rssi = (recv_info && recv_info->rx_ctrl) ? (int8_t)recv_info->rx_ctrl->rssi : -55;
 #else
 static void s3_espnow_recv_cb(const uint8_t* mac_addr, const uint8_t* data, int len) {
     const uint8_t* src_mac = mac_addr;
+    int8_t rx_rssi = -55;
 #endif
     if (!data || len < 8) return;
     if (src_mac && memcmp(src_mac, g_s3_mac, 6) == 0) return;
@@ -492,6 +497,12 @@ static void s3_espnow_recv_cb(const uint8_t* mac_addr, const uint8_t* data, int 
     // 0. Accept "TWIF" Triad Wi-Fi & OTA Share Capsule from sibling board
     if (data[0] == 'T' && data[1] == 'W' && data[2] == 'I' && data[3] == 'F') {
         net_on_espnow_twif(data, len);
+        return;
+    }
+
+    // 0B. Accept 64-byte "MN" (0x4D4E MemnetCapsule64) from sibling watch or SUN:TDECK
+    if (len >= 64 && data[0] == 'N' && data[1] == 'M') {
+        memnet_on_espnow_rx(data, len, rx_rssi);
         return;
     }
 
@@ -524,6 +535,7 @@ static void s3_espnow_recv_cb(const uint8_t* mac_addr, const uint8_t* data, int 
     if (nid == 3) {
         g_s3_peer_rx_cnt++;
         g_s3_sun_ch = g_s3_channel;
+        memnet_record_peer_rssi(3, rx_rssi);
         for (int k = 0; k < 3; k++) {
             g_triad_nodes[k].online = true;
             g_triad_nodes[k].ttl_q8 = 255;
@@ -542,6 +554,7 @@ static void s3_espnow_recv_cb(const uint8_t* mac_addr, const uint8_t* data, int 
         if (nid == g_triad_self_id) nid = (g_triad_self_id + 1) % 3;
     }
 
+    memnet_record_peer_rssi(nid, rx_rssi);
     g_s3_peer_rx_cnt++;
     g_s3_sun_ch = g_s3_channel;
     g_triad_nodes[nid].online    = true;
@@ -561,7 +574,15 @@ static void s3_espnow_recv_cb(const uint8_t* mac_addr, const uint8_t* data, int 
     }
 }
 
-static void s3_espnow_broadcast(uint8_t sx, uint8_t sy, int16_t amp) {
+static volatile bool    g_mesh_tx_pending  = false;
+static volatile bool    g_mesh_wake_sweep  = false;
+static volatile uint8_t g_mesh_tx_sx       = 32;
+static volatile uint8_t g_mesh_tx_sy       = 32;
+static volatile int16_t g_mesh_tx_amp      = 0;
+static bool             g_mesh_worker_init = false;
+static volatile bool    g_net_busy         = false;
+
+static void s3_espnow_broadcast_impl(uint8_t sx, uint8_t sy, int16_t amp) {
     if (!g_s3_espnow_ok) return;
     S3TriadCapsule pkt;
     pkt.magic[0]   = 'T';
@@ -574,8 +595,10 @@ static void s3_espnow_broadcast(uint8_t sx, uint8_t sy, int16_t amp) {
     pkt.qt_byte    = g_imu.qt_byte;
     int ax_i = (int)(g_imu.ax * 64.0f);
     int ay_i = (int)(g_imu.ay * 64.0f);
-    if (ax_i < -100) ax_i = -100; if (ax_i > 100) ax_i = 100;
-    if (ay_i < -100) ay_i = -100; if (ay_i > 100) ay_i = 100;
+    if (ax_i < -100) ax_i = -100;
+    if (ax_i > 100) ax_i = 100;
+    if (ay_i < -100) ay_i = -100;
+    if (ay_i > 100) ay_i = 100;
     pkt.ax_i8      = (int8_t)ax_i;
     pkt.ay_i8      = (int8_t)ay_i;
     pkt.nand_trit  = g_s3_nand_ring[0];
@@ -615,16 +638,76 @@ static void s3_espnow_broadcast(uint8_t sx, uint8_t sy, int16_t amp) {
     g_s3_channel = primary_ch;
 }
 
-// Non-blocking 1-channel-per-tick wake-up capsule (zero delay() stall on the UI loop!)
+// Non-blocking async enqueue from Core 1 UI thread -> Core 0 RF mesh task
+static void s3_espnow_broadcast(uint8_t sx, uint8_t sy, int16_t amp) {
+    if (!g_s3_espnow_ok) return;
+    g_mesh_tx_sx      = sx;
+    g_mesh_tx_sy      = sy;
+    g_mesh_tx_amp     = amp;
+    g_mesh_tx_pending = true;
+}
+
 static void s3_espnow_wake_siblings(uint8_t sx, uint8_t sy, int16_t amp) {
     if (!g_s3_espnow_ok) return;
+    g_mesh_tx_sx      = sx;
+    g_mesh_tx_sy      = sy;
+    g_mesh_tx_amp     = amp;
+    g_mesh_wake_sweep = true;
+    g_mesh_tx_pending = true;
+}
+
+static void s3_mesh_async_worker_task(void* arg) {
+    (void)arg;
+    unsigned long last_hop_ms  = 0;
+    unsigned long last_peer_ms = 0;
     static const uint8_t sweep_order[4] = {1, 6, 11, 3};
     static uint8_t sweep_idx = 0;
-    uint8_t target_ch = sweep_order[sweep_idx & 3];
-    sweep_idx++;
-    esp_wifi_set_channel(target_ch, WIFI_SECOND_CHAN_NONE);
-    g_s3_channel = target_ch;
-    s3_espnow_broadcast(sx, sy, amp);
+
+    for (;;) {
+        if (g_net_busy) {
+            vTaskDelay(pdMS_TO_TICKS(25));
+            continue;
+        }
+        unsigned long now = millis();
+        if (g_mesh_tx_pending) {
+            uint8_t sx  = g_mesh_tx_sx;
+            uint8_t sy  = g_mesh_tx_sy;
+            int16_t amp = g_mesh_tx_amp;
+            bool wake   = g_mesh_wake_sweep;
+            g_mesh_tx_pending = false;
+            g_mesh_wake_sweep = false;
+            if (wake) {
+                uint8_t target_ch = sweep_order[sweep_idx & 3];
+                sweep_idx++;
+                esp_wifi_set_channel(target_ch, WIFI_SECOND_CHAN_NONE);
+                g_s3_channel = target_ch;
+            }
+            s3_espnow_broadcast_impl(sx, sy, amp);
+        } else if (g_s3_hopping && (now - last_hop_ms >= 320)) {
+            last_hop_ms = now;
+            g_s3_mesh_slot = !g_s3_mesh_slot;
+            if (g_s3_mesh_slot) {
+                g_s3_channel = (int)g_s3_sun_ch;
+                esp_wifi_set_channel(g_s3_channel, WIFI_SECOND_CHAN_NONE);
+                s3_espnow_broadcast_impl(32, 32, 0);
+            } else {
+                g_s3_scan_ch = (g_s3_scan_ch % S3_MAX_CHANNEL) + 1;
+                g_s3_channel = g_s3_scan_ch;
+                esp_wifi_set_channel(g_s3_channel, WIFI_SECOND_CHAN_NONE);
+            }
+        } else if (!g_s3_hopping && (now - last_peer_ms >= 600)) {
+            last_peer_ms = now;
+            esp_wifi_set_channel((int)g_s3_sun_ch, WIFI_SECOND_CHAN_NONE);
+            s3_espnow_broadcast_impl(32, 32, 0);
+        }
+        vTaskDelay(pdMS_TO_TICKS(15));
+    }
+}
+
+static void s3_mesh_async_start_worker() {
+    if (g_mesh_worker_init) return;
+    g_mesh_worker_init = true;
+    xTaskCreatePinnedToCore(s3_mesh_async_worker_task, "s3_mesh_async", 4096, NULL, 1, NULL, 0);
 }
 
 // ============================================================
@@ -693,7 +776,10 @@ static void IRAM_ATTR s3_wifi_promisc_cb(void* buf, wifi_promiscuous_pkt_type_t 
                                 slot = (int)(g_s3_total_pkts % S3_MAX_APS);
                             }
                         }
-                        g_medusa_aps[slot].used = true;
+                        uint16_t cap_info = (uint16_t)payload[sizeof(S3WifiMacHdr) + 10] |
+                                            ((uint16_t)payload[sizeof(S3WifiMacHdr) + 11] << 8);
+                        g_medusa_aps[slot].used    = true;
+                        g_medusa_aps[slot].is_open = ((cap_info & 0x0010u) == 0);
                         memcpy(g_medusa_aps[slot].bssid, hdr->addr3, 6);
                         memcpy(g_medusa_aps[slot].ssid, &payload[off + 2], tlen);
                         g_medusa_aps[slot].ssid[tlen] = '\0';
@@ -1028,6 +1114,8 @@ static char s3_trit_char(int8_t t) {
     return '.';
 }
 
+static uint8_t g_s3_active_mode = 0;
+
 static void s3_render_header(S3Canvas& c) {
     int W = (int)g_lcd_w;
     c.fill_rect(0, 0, W, 40, COL_BG_ELEV);
@@ -1043,8 +1131,8 @@ static void s3_render_header(S3Canvas& c) {
     c.draw_text(28, 7, hdr_title, COL_TEXT, 2);
 
     char sub_hdr[44];
-    snprintf(sub_hdr, sizeof(sub_hdr), "ms.8b.is S:%u%% ReM:%u [%u/3]",
-             g_ms_mean_salience, g_ms_reynolds, s3_triad_online_count());
+    snprintf(sub_hdr, sizeof(sub_hdr), "M%02u MEM8 S:%u%% ReM:%u [%u/3]",
+             (unsigned)g_s3_active_mode, g_ms_mean_salience, g_ms_reynolds, s3_triad_online_count());
     c.draw_text(28, 25, sub_hdr, pcol, 1);
 
     int qt_x = W - 150;
@@ -1754,6 +1842,20 @@ static void s3_render_tab_viz_tts(S3Canvas& c) {
     c.draw_text_centered(24 + bw + bw / 2, btn_y + 9, "STEP VIZ.VAKED.DEV", COL_GOLD, 1);
 }
 
+static bool g_s3_guardian_hud = false;
+static void s3_render_tab_guardian(S3Canvas& c);
+static void s3_handle_guardian_touch(int W, int H, int footer_y, uint16_t tx, uint16_t ty);
+static void s3_render_mode_pranayama(S3Canvas& c);
+static void s3_render_mode_riva_gaia(S3Canvas& c);
+static void s3_render_mode_phoenix_hive(S3Canvas& c);
+static void s3_render_mode_learn(S3Canvas& c);
+static void s3_render_mode_kompress(S3Canvas& c);
+static void s3_render_mode_aurora_alexai(S3Canvas& c);
+static void s3_render_mode_mem8(S3Canvas& c);
+static void s3_set_active_mode(uint8_t mode_idx);
+static void s3_handle_extended_mode_touch(int W, int H, int footer_y, uint16_t tx, uint16_t ty);
+extern uint8_t g_s3_active_mode;
+
 static void s3_render_frame() {
     int H = (int)g_lcd_h;
     int footer_y = H - 52;
@@ -1768,13 +1870,23 @@ static void s3_render_frame() {
         if (y0 < 42) {
             s3_render_header(canvas);
         }
-        switch (g_s3_active_tab) {
-            case 0: s3_render_tab_zen(canvas);     break;
-            case 1: s3_render_tab_radio(canvas);   break;
-            case 2: s3_render_tab_wifi(canvas);    break;
-            case 3: s3_render_tab_nand(canvas);    break;
-            case 4: s3_render_tab_qwave(canvas);   break;
-            case 5: s3_render_tab_viz_tts(canvas); break;
+        uint8_t m = g_s3_guardian_hud ? 13 : g_s3_active_mode;
+        switch (m) {
+            case 0:  s3_render_tab_zen(canvas);           break;
+            case 1:  s3_render_tab_radio(canvas);         break;
+            case 2:  s3_render_tab_wifi(canvas);          break;
+            case 3:  s3_render_tab_nand(canvas);          break;
+            case 4:  s3_render_tab_qwave(canvas);         break;
+            case 5:  s3_render_tab_viz_tts(canvas);       break;
+            case 6:  s3_render_mode_pranayama(canvas);    break;
+            case 7:  s3_render_mode_riva_gaia(canvas);    break;
+            case 8:  s3_render_mode_phoenix_hive(canvas); break;
+            case 9:  s3_render_mode_learn(canvas);        break;
+            case 10: s3_render_mode_kompress(canvas);     break;
+            case 11: s3_render_mode_aurora_alexai(canvas);break;
+            case 12: s3_render_mode_mem8(canvas);         break;
+            case 13: s3_render_tab_guardian(canvas);      break;
+            default: s3_render_tab_zen(canvas);           break;
         }
         if (y0 + bh > footer_y) {
             s3_render_footer_tabs(canvas);
@@ -1807,7 +1919,7 @@ static void s3_handle_touch() {
     int H = (int)g_lcd_h;
     int footer_y = H - 52;
 
-    if (g_touch.touched && g_s3_active_tab == 0 && g_touch.y > 44 && g_touch.y < footer_y - 38) {
+    if (g_touch.touched && g_s3_active_mode == 0 && g_touch.y > 44 && g_touch.y < footer_y - 38) {
         int wx = ((int)g_touch.x * (WAVE_POOL_N - 4)) / W + 2;
         int wy = (((int)g_touch.y - 44) * (WAVE_POOL_N - 4)) / (footer_y - 82) + 2;
         s3_wave_pool_splash(wx, wy, 5800, 5);
@@ -1820,11 +1932,32 @@ static void s3_handle_touch() {
     uint16_t tx = g_touch.x;
     uint16_t ty = g_touch.y;
 
+    // Tapping top header steps through all 14 modes (0..13): left = prev, right = next
+    if (ty <= 42) {
+        uint8_t next_mode = (tx < W / 2) ? (uint8_t)((g_s3_active_mode + 13) % 14)
+                                         : (uint8_t)((g_s3_active_mode + 1) % 14);
+        s3_set_active_mode(next_mode);
+        return;
+    }
+
     if (ty >= footer_y) {
         uint8_t new_tab = (uint8_t)((tx * S3_TAB_COUNT) / W);
         if (new_tab >= S3_TAB_COUNT) new_tab = S3_TAB_COUNT - 1;
-        g_s3_active_tab = new_tab;
-        Serial.printf("{\"event\":\"tab\",\"val\":%u}\n", g_s3_active_tab);
+        if (g_s3_active_mode == new_tab) {
+            // Tapping the already-active footer tab steps into the extended modes (6..13)
+            s3_set_active_mode((uint8_t)(6 + (new_tab % 8)));
+        } else {
+            s3_set_active_mode(new_tab);
+        }
+        return;
+    }
+
+    if (g_s3_guardian_hud || g_s3_active_mode == 13) {
+        s3_handle_guardian_touch(W, H, footer_y, tx, ty);
+        return;
+    }
+    if (g_s3_active_mode >= 6) {
+        s3_handle_extended_mode_touch(W, H, footer_y, tx, ty);
         return;
     }
 
@@ -1925,6 +2058,136 @@ static void s3_handle_touch() {
 #include "net_time.h"
 #include "pranayama.h"
 #include "guardian_mesh.h"
+
+static void s3_render_tab_guardian(S3Canvas& c) {
+    int W  = (int)g_lcd_w;
+    int H  = (int)g_lcd_h;
+    int cw = W - 16;
+
+    uint16_t alert_col = (g_guardian_alert >= ALERT_SHADOW_PERSISTENCE) ? COL_CORAL
+                       : ((g_guardian_alert == ALERT_WATCH) ? COL_GOLD : COL_MINT);
+    uint16_t alert_bg  = (g_guardian_alert >= ALERT_SHADOW_PERSISTENCE) ? COL_CORAL_DARK
+                       : ((g_guardian_alert == ALERT_WATCH) ? COL_GOLD_DARK : COL_MINT_DARK);
+
+    // 1. Chiro-chan Companion Soul Card
+    c.fill_card(8, 46, cw, 118, COL_BG_ELEV, COL_MINT);
+    c.draw_text(18, 53, "MODE 13 // CHIRO-CHAN x TAMAGOTCHI MESH", COL_MINT, 1);
+
+    // Draw Chiro-chan Tamagotchi sprite in left well
+    int cx = 56;
+    int cy = 112;
+    c.fill_card(18, 68, 76, 86, COL_BG_PANEL, alert_col);
+    c.draw_circle(cx, cy - 6, 22, alert_col);
+    c.draw_circle(cx, cy - 6, 18, COL_GOLD);
+    // Ears / wings
+    c.draw_line(cx - 16, cy - 22, cx - 24, cy - 32, COL_CYAN, 2);
+    c.draw_line(cx + 16, cy - 22, cx + 24, cy - 32, COL_CYAN, 2);
+    // Eyes & smile
+    c.fill_rect(cx - 9, cy - 11, 4, 5, COL_TEXT);
+    c.fill_rect(cx + 5, cy - 11, 4, 5, COL_TEXT);
+    c.draw_hline(cx - 5, cy + 2, 10, alert_col);
+    c.draw_text_centered(cx, 142, "CHIRO", COL_GOLD, 1);
+
+    int rx = 104;
+    char ln_buf[56];
+    snprintf(ln_buf, sizeof(ln_buf), "STAGE: %s",
+             GUARDIAN_STAGE_NAMES[g_guardian_soul.companion_stage & 3]);
+    c.draw_text(rx, 72, ln_buf, COL_GOLD, 1);
+
+    snprintf(ln_buf, sizeof(ln_buf), "BOND p/q: %ld/%ld  CHARGE:%+d",
+             (long)g_guardian_soul.bond_p, (long)g_guardian_soul.bond_q,
+             (int)g_guardian_soul.wave_net_charge);
+    c.draw_text(rx, 88, ln_buf, COL_TEXT, 1);
+
+    snprintf(ln_buf, sizeof(ln_buf), "WAVE b3 : %s", g_guardian_soul.wave_b3);
+    c.draw_text(rx, 104, ln_buf, COL_CYAN, 1);
+
+    snprintf(ln_buf, sizeof(ln_buf), "TCH:%lu FLOCK:%lu DUET:%lu",
+             (unsigned long)g_guardian_soul.care_touches,
+             (unsigned long)g_guardian_soul.friend_mesh_syncs,
+             (unsigned long)g_guardian_soul.harmonic_duets);
+    c.draw_text(rx, 120, ln_buf, COL_SUBTEXT, 1);
+
+    snprintf(ln_buf, sizeof(ln_buf), "THOUGHTS:%lu  TRUSTED:%u",
+             (unsigned long)g_guardian_soul.shared_thoughts,
+             (unsigned)g_guardian_flock_count);
+    c.draw_text(rx, 136, ln_buf, COL_MINT, 1);
+
+    // 2. Following-Shadow Persistence Detector Card
+    c.fill_card(8, 170, cw, 102, COL_BG_ELEV, alert_col);
+    c.fill_card(16, 177, cw - 16, 22, alert_bg, alert_col);
+    snprintf(ln_buf, sizeof(ln_buf), "STATUS: %s (%u)",
+             GUARDIAN_ALERT_NAMES[g_guardian_alert & 3], (unsigned)g_guardian_alert);
+    c.draw_text_centered(W / 2, 184, ln_buf, alert_col, 1);
+
+    const char* zname = GUARDIAN_SIM_ZONE_NAMES[g_guardian_zone_idx & 3];
+    snprintf(ln_buf, sizeof(ln_buf), "ZONE: %s (visited:%u)",
+             zname, (unsigned)guardian_popcount16(g_guardian_visited_zones_mask));
+    c.draw_text(18, 206, ln_buf, COL_TEXT, 1);
+
+    snprintf(ln_buf, sizeof(ln_buf), "SHADOW FNV32: 0x%08lx  ZONES:%u/3",
+             (unsigned long)g_guardian_shadow_mac_fnv32,
+             (unsigned)guardian_popcount16(g_guardian_shadow_zone_mask));
+    c.draw_text(18, 222, ln_buf,
+                (g_guardian_shadow_mac_fnv32 != 0) ? alert_col : COL_SUBTEXT, 1);
+
+    // 3 Zone pills: Gate -> Train -> Park
+    const char* z_lbl[3] = {"Z0:GATE", "Z1:TRAIN", "Z2:PARK"};
+    int z_step = (cw - 20) / 3;
+    for (int z = 0; z < 3; z++) {
+        int zx = 16 + z * z_step;
+        bool shadow_here = (g_guardian_shadow_zone_mask & (1u << z)) != 0;
+        bool visited_here = (g_guardian_visited_zones_mask & (1u << z)) != 0;
+        uint16_t zc = shadow_here ? COL_CORAL : (visited_here ? COL_MINT : COL_DIM);
+        c.fill_card(zx, 238, z_step - 4, 26, COL_BG_PANEL, zc);
+        c.draw_text_centered(zx + (z_step - 4) / 2, 247, z_lbl[z], zc, 1);
+    }
+
+    // 3. 64-Byte Chained Breadcrumb & Interactive Action Card
+    int bc_y = 278;
+    int bc_h = (H - 56) - bc_y;
+    c.fill_card(8, bc_y, cw, bc_h, COL_BG_ELEV, COL_GOLD);
+    c.draw_text(18, bc_y + 7, "64B BREADCRUMB CHAIN (0x4752 FNV-1a)", COL_GOLD, 1);
+
+    snprintf(ln_buf, sizeof(ln_buf), "SEQ:#%lu SEAL:0x%016llx",
+             (unsigned long)g_guardian_seq, (unsigned long long)g_guardian_chain_fnv64);
+    c.draw_text(18, bc_y + 23, ln_buf, COL_CYAN, 1);
+
+    char th_short[44];
+    strncpy(th_short, g_guardian_soul.last_thought, 40);
+    th_short[40] = '\0';
+    c.draw_text(18, bc_y + 39, th_short, COL_TEXT, 1);
+
+    int btn_y = bc_y + bc_h - 34;
+    int bw    = (cw - 28) / 2;
+    c.fill_card(16, btn_y, bw, 26, COL_MINT_DARK, COL_MINT);
+    c.draw_text_centered(16 + bw / 2, btn_y + 9, "CARE + THOUGHT", COL_MINT, 1);
+
+    if (g_guardian_alert >= ALERT_WATCH) {
+        c.fill_card(24 + bw, btn_y, bw, 26, COL_GOLD_DARK, COL_GOLD);
+        c.draw_text_centered(24 + bw + bw / 2, btn_y + 9, "CLEAR -> SAFE", COL_GOLD, 1);
+    } else {
+        c.fill_card(24 + bw, btn_y, bw, 26, COL_CORAL_DARK, COL_CORAL);
+        c.draw_text_centered(24 + bw + bw / 2, btn_y + 9, "SIM 3-ZONE SHADOW", COL_CORAL, 1);
+    }
+}
+
+static void s3_handle_guardian_touch(int W, int H, int footer_y, uint16_t tx, uint16_t ty) {
+    (void)H;
+    if (ty >= footer_y - 48 && ty < footer_y) {
+        if (tx < W / 2) {
+            g_guardian_soul.care_touches++;
+            guardian_share_thought("Chiro-chan received a warm care touch! {<3,<3,<3}+1");
+            guardian_emit_status();
+        } else {
+            if (g_guardian_alert >= ALERT_WATCH) {
+                guardian_clear();
+            } else {
+                guardian_sim_shadow();
+            }
+        }
+    }
+}
 
 static const char* const S3_RIVA_LULLABY[10] = {
     "She blinks, and the sphere rocks.",
@@ -2157,6 +2420,8 @@ static void s3_emit_medusa_scan() {
     s3_emit_medusa_json();
 }
 
+#include "mem8_consciousness.h"
+
 static void s3_handle_serial(const char* line) {
     if (strcasecmp(line, "PING") == 0) {
         Serial.printf("# PONG|%s|%02X:%02X:%02X:%02X:%02X:%02X|%lu\n",
@@ -2210,6 +2475,8 @@ static void s3_handle_serial(const char* line) {
     } else if (strcasecmp(line, "KOMPRESS") == 0 || strcasecmp(line, "ENTROPY") == 0 ||
                strcasecmp(line, "OMNI") == 0 || strcasecmp(line, "KUNISADA") == 0 ||
                strcasecmp(line, "KUNIYOSHI") == 0) {
+        g_s3_active_mode  = 10;
+        g_s3_guardian_hud = false;
         Serial.printf("# KOMPRESS|OMNI-CHAN|<<<<oOo>>>>|KUNISADA_KUNIYOSHI|010001000|"
                       "wupz=0x%016llx|pos=0x%016llx|neg=0x%016llx|b158=%s|ratio=20.19x\n",
                       (unsigned long long)g_kompress_wupz_u64,
@@ -2219,8 +2486,9 @@ static void s3_handle_serial(const char* line) {
         s3_emit_status_json();
     } else if (strncasecmp(line, "tab ", 4) == 0) {
         int tab = atoi(line + 4);
-        if (tab >= 0 && tab < S3_TAB_COUNT) g_s3_active_tab = (uint8_t)tab;
-        Serial.printf("{\"cmd\":\"tab\",\"val\":%u}\n", g_s3_active_tab);
+        if (tab >= 0 && tab < S3_MODE_COUNT) {
+            s3_set_active_mode((uint8_t)tab);
+        }
     } else if (strncasecmp(line, "splash", 6) == 0) {
         s3_wave_pool_splash(32, 32, 7800, 6);
         s3_espnow_broadcast(32, 32, 7800);
@@ -2251,9 +2519,52 @@ static void s3_handle_serial(const char* line) {
     } else if (strcasecmp(line, "hop") == 0) {
         g_s3_hopping = !g_s3_hopping;
         Serial.printf("{\"cmd\":\"hop\",\"en\":%d}\n", g_s3_hopping ? 1 : 0);
+    } else if (strcasecmp(line, "MODE") == 0) {
+        s3_set_active_mode((uint8_t)((g_s3_active_mode + 1) % S3_MODE_COUNT));
     } else if (strncasecmp(line, "mode ", 5) == 0) {
-        set_wave_mode(line + 5);
-        Serial.printf("{\"cmd\":\"mode\",\"val\":\"%s\"}\n", line + 5);
+        const char* m_arg = line + 5;
+        while (*m_arg == ' ') m_arg++;
+        if (strcasecmp(m_arg, "raw") == 0 || strcasecmp(m_arg, "wave") == 0 || strcasecmp(m_arg, "json") == 0) {
+            set_wave_mode(m_arg);
+            Serial.printf("{\"cmd\":\"mode\",\"val\":\"%s\"}\n", m_arg);
+        } else if (strcasecmp(m_arg, "next") == 0) {
+            s3_set_active_mode((uint8_t)((g_s3_active_mode + 1) % S3_MODE_COUNT));
+        } else if (strcasecmp(m_arg, "prev") == 0) {
+            s3_set_active_mode((uint8_t)((g_s3_active_mode + S3_MODE_COUNT - 1) % S3_MODE_COUNT));
+        } else if (m_arg[0] >= '0' && m_arg[0] <= '9') {
+            int m_num = atoi(m_arg);
+            if (m_num >= 0 && m_num < S3_MODE_COUNT) {
+                s3_set_active_mode((uint8_t)m_num);
+            }
+        } else if (strcasecmp(m_arg, "zen") == 0 || strcasecmp(m_arg, "anicca") == 0 || strcasecmp(m_arg, "wavepool") == 0) {
+            s3_set_active_mode(0);
+        } else if (strcasecmp(m_arg, "radio") == 0 || strcasecmp(m_arg, "zoneinn") == 0 || strcasecmp(m_arg, "bicep") == 0) {
+            s3_set_active_mode(1);
+        } else if (strcasecmp(m_arg, "wifi") == 0 || strcasecmp(m_arg, "80211") == 0 || strcasecmp(m_arg, "spectrum") == 0) {
+            s3_set_active_mode(2);
+        } else if (strcasecmp(m_arg, "nand") == 0 || strcasecmp(m_arg, "imu") == 0 || strcasecmp(m_arg, "lissajous") == 0) {
+            s3_set_active_mode(3);
+        } else if (strcasecmp(m_arg, "qwave") == 0 || strcasecmp(m_arg, "triad") == 0 || strcasecmp(m_arg, "sphered") == 0) {
+            s3_set_active_mode(4);
+        } else if (strcasecmp(m_arg, "viz") == 0 || strcasecmp(m_arg, "enthea") == 0 || strcasecmp(m_arg, "tts") == 0) {
+            s3_set_active_mode(5);
+        } else if (strcasecmp(m_arg, "pranayama") == 0 || strcasecmp(m_arg, "dream") == 0 || strcasecmp(m_arg, "breathe") == 0) {
+            s3_set_active_mode(6);
+        } else if (strcasecmp(m_arg, "riva") == 0 || strcasecmp(m_arg, "gaia") == 0 || strcasecmp(m_arg, "lullaby") == 0) {
+            s3_set_active_mode(7);
+        } else if (strcasecmp(m_arg, "phoenix") == 0 || strcasecmp(m_arg, "power") == 0 || strcasecmp(m_arg, "beehive") == 0) {
+            s3_set_active_mode(8);
+        } else if (strcasecmp(m_arg, "learn") == 0 || strcasecmp(m_arg, "anomaly") == 0) {
+            s3_set_active_mode(9);
+        } else if (strcasecmp(m_arg, "kompress") == 0 || strcasecmp(m_arg, "entropy") == 0 || strcasecmp(m_arg, "wupz") == 0) {
+            s3_set_active_mode(10);
+        } else if (strcasecmp(m_arg, "aurora") == 0 || strcasecmp(m_arg, "alexai") == 0 || strcasecmp(m_arg, "upz") == 0) {
+            s3_set_active_mode(11);
+        } else if (strcasecmp(m_arg, "mem8") == 0 || strcasecmp(m_arg, "conscious") == 0 || strcasecmp(m_arg, "consciousness") == 0) {
+            s3_set_active_mode(12);
+        } else if (strcasecmp(m_arg, "guardian") == 0 || strcasecmp(m_arg, "chiro") == 0 || strcasecmp(m_arg, "tamagotchi") == 0) {
+            s3_set_active_mode(13);
+        }
     } else if (strncasecmp(line, "boot ", 5) == 0) {
         s3_boot_partition(line + 5);
     } else if (strncasecmp(line, "bright ", 7) == 0) {
@@ -2280,11 +2591,11 @@ static void s3_handle_serial(const char* line) {
         while (*arg == ' ') arg++;
         if (strcasecmp(arg, "TRIAD") == 0 || strcasecmp(arg, "ALL") == 0 || strcasecmp(arg, "SHARE") == 0) {
             net_share_wifi_espnow(true);
-            net_ota_check_and_update(nullptr, true);
+            net_queue_ota(nullptr, true);
         } else if (*arg) {
-            net_ota_check_and_update(arg, true);
+            net_queue_ota(arg, true);
         } else {
-            net_ota_check_and_update(nullptr, true);
+            net_queue_ota(nullptr, true);
         }
     } else if (strncasecmp(line, "ble", 3) == 0 && (line[3] == 0 || line[3] == 0x20)) {
         net_ble_start();
@@ -2319,6 +2630,8 @@ static void s3_handle_serial(const char* line) {
             }
         }
     } else if (strncasecmp(line, "learn", 5) == 0) {
+        g_s3_active_mode  = 9;
+        g_s3_guardian_hud = false;
         const char* a = line + 5;
         while (*a == ' ') a++;
         if (strncasecmp(a, "speak ", 6) == 0) { g_lrn_speak = atoi(a + 6) != 0; learn_save(); }
@@ -2327,8 +2640,12 @@ static void s3_handle_serial(const char* line) {
         else if (strncasecmp(a, "say ", 4) == 0) { g_lrn_last_speak = 0; learn_set_say(a + 4, -1, 0); }
         learn_emit_status();
     } else if (strcasecmp(line, "POWER") == 0 || strcasecmp(line, "PHOENIX") == 0) {
+        g_s3_active_mode  = 8;
+        g_s3_guardian_hud = false;
         phoenix_emit();
     } else if (strcasecmp(line, "BEEHIVE") == 0 || strcasecmp(line, "HIVE") == 0) {
+        g_s3_active_mode  = 8;
+        g_s3_guardian_hud = false;
         hive_emit_frame();
     } else if (strncasecmp(line, "engine ", 7) == 0) {
         // ENGINE <qt>|<layers>|<family_hz>|<ct000 bits>  (fed by 8b-is-music + 8b-is-engine via wiglewww)
@@ -2348,7 +2665,9 @@ static void s3_handle_serial(const char* line) {
             g_viz_mode   = (g_viz_mode + 1) & 7;
             g_viz_kluver = (g_viz_kluver + 1) & 3;
         }
-        g_s3_active_tab = 5;
+        g_s3_active_tab   = 5;
+        g_s3_active_mode  = 5;
+        g_s3_guardian_hud = false;
         s3_wave_pool_splash(32, 32, 8200, 6);
         s3_espnow_broadcast(32, 32, 8200);
         s3_emit_viz_line();
@@ -2367,7 +2686,9 @@ static void s3_handle_serial(const char* line) {
             txt = g_tts_last_text;
         }
         g_tts_speak_count++;
-        g_s3_active_tab = 5;
+        g_s3_active_tab   = 5;
+        g_s3_active_mode  = 5;
+        g_s3_guardian_hud = false;
         s3_es8311_speak(txt, g_medusa_freq_hz, g_triad_self_pole);
         s3_wave_pool_splash(32, 32, 8600, 6);
         s3_espnow_broadcast(32, 32, 8600);
@@ -2376,9 +2697,11 @@ static void s3_handle_serial(const char* line) {
                       (int)g_triad_self_pole, g_tts_last_text, (unsigned long)g_tts_speak_count);
     } else if (strcasecmp(line, "BICEP") == 0 || strcasecmp(line, "GLUE") == 0 ||
                strcasecmp(line, "BICEP GLUE") == 0) {
-        g_s3_track_idx  = 17; // #18: GLUE — BICEP (UK Breakbeat, Cm, 130 BPM)
-        g_s3_playing    = true;
-        g_s3_active_tab = 1;  // Switch to RADIO / 8-Band Ternary EQ
+        g_s3_track_idx    = 17; // #18: GLUE — BICEP (UK Breakbeat, Cm, 130 BPM)
+        g_s3_playing      = true;
+        g_s3_active_tab   = 1;  // Switch to RADIO / 8-Band Ternary EQ
+        g_s3_active_mode  = 1;
+        g_s3_guardian_hud = false;
         s3_wave_pool_splash(32, 32, 9000, 7);
         s3_espnow_wake_siblings(32, 32, 9000);
         s3_emit_track_event();
@@ -2386,8 +2709,10 @@ static void s3_handle_serial(const char* line) {
         Serial.printf("# BICEP|{\"track\":\"GLUE\",\"artist\":\"BICEP\",\"genre\":\"UK Breakbeat\",\"key\":\"Cm\",\"bpm\":130,\"idx\":18,\"node\":\"%s\",\"triad_online\":%u}\n",
                       g_medusa_node, (unsigned)s3_triad_online_count());
     } else if (strcasecmp(line, "RIVA") == 0 || strcasecmp(line, "LULLABY") == 0) {
-        g_s3_track_idx = 26; // #27: RIVA · 1-Bit River (Lullaby)
-        g_s3_playing   = true;
+        g_s3_track_idx    = 26; // #27: RIVA · 1-Bit River (Lullaby)
+        g_s3_playing      = true;
+        g_s3_active_mode  = 7;
+        g_s3_guardian_hud = false;
         s3_wave_pool_splash(32, 32, 8800, 7);
         s3_espnow_wake_siblings(32, 32, 8800);
         const char* verse = S3_RIVA_LULLABY[g_riva_verse_idx % 10];
@@ -2396,6 +2721,8 @@ static void s3_handle_serial(const char* line) {
         s3_emit_gaia_line();
     } else if (strcasecmp(line, "GAIA") == 0 || strcasecmp(line, "EVOLVE") == 0 ||
                strcasecmp(line, "ULTRA") == 0) {
+        g_s3_active_mode  = 7;
+        g_s3_guardian_hud = false;
         s3_wave_pool_splash(32, 32, 8400, 6);
         s3_espnow_wake_siblings(32, 32, 8400);
         s3_emit_gaia_line();
@@ -2417,7 +2744,9 @@ static void s3_handle_serial(const char* line) {
         pranayama_emit_json(g_medusa_node, g_engine_line, g_medusa_entropy, g_medusa_mean_rssi, s3_triad_online_count());
     } else if (strcasecmp(line, "PRANAYAMA") == 0 || strcasecmp(line, "DREAM") == 0 ||
                strcasecmp(line, "BABA") == 0 || strcasecmp(line, "BREATHE") == 0) {
-        g_s3_hopping = true;
+        g_s3_hopping      = true;
+        g_s3_active_mode  = 6;
+        g_s3_guardian_hud = false;
         pranayama_tick(millis(), g_imu.sickness, g_ms_mean_salience, s3_triad_online_count());
         if (strcasecmp(line, "DREAM") == 0) {
             g_prana.dream_mode = STATE_DREAM_MANDALA;
@@ -2427,8 +2756,17 @@ static void s3_handle_serial(const char* line) {
         pranayama_emit_json(g_medusa_node, g_engine_line, g_medusa_entropy, g_medusa_mean_rssi, s3_triad_online_count());
         s3_emit_riva_line();
         s3_emit_gaia_line();
+    } else if (strcasecmp(line, "AURORA") == 0 || strcasecmp(line, "ALEXAI") == 0 || strcasecmp(line, "UPZ") == 0) {
+        g_s3_active_mode  = 11;
+        g_s3_guardian_hud = false;
+        s3_emit_medusa_json();
+    } else if (mem8_handle_serial(line)) {
+        g_s3_active_mode  = 12;
+        g_s3_guardian_hud = false;
     } else if (guardian_handle_serial(line)) {
-        // Handled by Chiro Guardian Tamagotchi Safety Mesh (GUARDIAN, GUARDIAN STATUS, GUARDIAN SIM_SHADOW, GUARDIAN TRUST, GUARDIAN THOUGHT)
+        // Handled by Chiro Guardian Tamagotchi Safety Mesh (GUARDIAN, GUARDIAN STATUS, GUARDIAN SIM_SHADOW, GUARDIAN CLEAR, GUARDIAN TRUST, GUARDIAN THOUGHT)
+        g_s3_guardian_hud = true;
+        g_s3_active_mode  = 13;
     }
 }
 
@@ -2441,6 +2779,7 @@ static inline void s3_handle_serial_command(const char* line) {
 // ============================================================
 static void s3_amoled_setup() {
     Serial.begin(115200);
+    Serial.setTxTimeoutMs(0); // Never block UI loop when USB-JTAG CDC FIFO has no active host reader
     delay(150);
 
     pinMode(PIN_BOOT_BTN, INPUT_PULLUP);
@@ -2518,19 +2857,22 @@ static void s3_amoled_setup() {
     net_load();
     net_ble_start();
     guardian_init();
+    mem8_init();
+    s3_mesh_async_start_worker();
+    s3_net_async_start_worker();
     s3_emit_medusa_json();
     s3_emit_viz_line();
     s3_emit_riva_line();
     s3_emit_gaia_line();
+    mem8_emit_wave(mem8_latest_wave());
     guardian_emit_status();
 }
 
 static void s3_amoled_loop() {
     static unsigned long last_frame_ms = 0;
-    static unsigned long last_hop_ms   = 0;
+    static unsigned long last_imu_ms   = 0;
     static unsigned long last_pmic_ms  = 0;
     static unsigned long last_wave_ms  = 0;
-    static unsigned long last_peer_ms  = 0;
     static unsigned long last_riva_ms  = 0;
     static bool          last_boot_btn = true;
     static bool          bright_ramped = false;
@@ -2546,35 +2888,18 @@ static void s3_amoled_loop() {
 
     bool boot_btn = digitalRead(PIN_BOOT_BTN);
     if (!boot_btn && last_boot_btn) {
-        g_s3_active_tab = (g_s3_active_tab + 1) % S3_TAB_COUNT;
-        Serial.printf("{\"event\":\"tab\",\"val\":%u,\"src\":\"boot_btn\"}\n", g_s3_active_tab);
+        s3_set_active_mode((uint8_t)((g_s3_active_mode + 1) % S3_MODE_COUNT));
     }
     last_boot_btn = boot_btn;
-
-    if (g_s3_hopping && (now - last_hop_ms >= 320)) {
-        last_hop_ms = now;
-        g_s3_mesh_slot = !g_s3_mesh_slot;
-        if (g_s3_mesh_slot) {
-            g_s3_channel = (int)g_s3_sun_ch;
-            esp_wifi_set_channel(g_s3_channel, WIFI_SECOND_CHAN_NONE);
-            s3_espnow_broadcast(32, 32, 0);
-        } else {
-            g_s3_scan_ch = (g_s3_scan_ch % S3_MAX_CHANNEL) + 1;
-            g_s3_channel = g_s3_scan_ch;
-            esp_wifi_set_channel(g_s3_channel, WIFI_SECOND_CHAN_NONE);
-        }
-    } else if (!g_s3_hopping && (now - last_peer_ms >= 600)) {
-        last_peer_ms = now;
-        esp_wifi_set_channel((int)g_s3_sun_ch, WIFI_SECOND_CHAN_NONE);
-        s3_espnow_broadcast(32, 32, 0);
-    }
 
     // RIVA & Pranayama 4s breath pulse: update pranayama + emit JSON/UPZ/ALEXAI/AURORA + sweep wake-up capsule
     if (now - last_riva_ms >= 4000) {
         last_riva_ms = now;
         g_medusa_scan_seq++;
         pranayama_tick(now, g_imu.sickness, g_ms_mean_salience, s3_triad_online_count());
-        s3_emit_medusa_json();
+        if (Serial.availableForWrite() >= 128) {
+            s3_emit_medusa_json();
+        }
         if (s3_triad_online_count() < 2 && g_ph_budget.mode != PH_CRITICAL) {
             s3_espnow_wake_siblings(32, 32, 4200);
         }
@@ -2590,24 +2915,29 @@ static void s3_amoled_loop() {
             applied_mode = pb.mode;
             if (pb.mode == PH_SAVING || pb.mode == PH_CRITICAL) {
                 s3_amoled_set_brightness((uint8_t)((uint32_t)pb.brightness_pct * 255u / 100u));
-                g_s3_hopping = false;
+                g_s3_hopping = (pb.mode != PH_CRITICAL);
             } else if (pb.mode == PH_EXTERNAL || pb.mode == PH_LISTENING) {
                 s3_amoled_set_brightness(0xD8);
                 g_s3_hopping = true;
             }
-            phoenix_emit();
+            if (Serial.availableForWrite() >= 128) {
+                phoenix_emit();
+            }
         }
         if (pb.alert) s3_es8311_speak(pb.alert == 2 ? "critical battery" : "low battery", g_medusa_freq_hz, g_triad_self_pole);
     }
 
     if (now - last_wave_ms >= 250) {
         last_wave_ms = now;
-        output_wave(g_s3_last_rssi, g_s3_last_type, g_s3_last_sub, now);
+        if (Serial.availableForWrite() >= 128) {
+            output_wave(g_s3_last_rssi, g_s3_last_type, g_s3_last_sub, now);
+        }
     }
 
     learn_tick(now);
     net_tick(now);
     guardian_tick(now);
+    mem8_tick(now);
     if (g_ble_cmd_pending) {
         g_ble_cmd_pending = false;
         char ble_line[128];
@@ -2624,10 +2954,15 @@ static void s3_amoled_loop() {
         last_frame_ms = now;
         s3_touch_poll();
         if (g_touch.just_pressed) { g_guardian_soul.care_touches++; guardian_update_companion_soul(); }
-        s3_imu_poll();
+        if (now - last_imu_ms >= 50) {
+            last_imu_ms = now;
+            s3_imu_poll();
+        }
         s3_handle_touch();
         s3_step_physics();
         s3_render_frame();
+    } else {
+        vTaskDelay(1);
     }
 
     while (Serial.available()) {
@@ -2635,7 +2970,9 @@ static void s3_amoled_loop() {
         if (ch == '\n' || ch == '\r') {
             if (cmd_pos > 0) {
                 cmd_buf[cmd_pos] = '\0';
+                Serial.setTxTimeoutMs(20);
                 s3_handle_serial(cmd_buf);
+                Serial.setTxTimeoutMs(0);
                 cmd_pos = 0;
             }
         } else if (cmd_pos < sizeof(cmd_buf) - 1) {

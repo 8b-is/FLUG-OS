@@ -485,19 +485,20 @@ static inline void guardian_emit_breadcrumb_line(const GuardianBreadcrumb64* b, 
     Serial.printf("# GUARDIAN|{\"node\":\"%s\",\"companion\":\"Chiro-chan\",\"stage\":\"%s\","
                   "\"trit\":%d,\"alert_level\":%u,\"alert\":\"%s\",\"zone_idx\":%u,\"zone\":\"%s\","
                   "\"zone_count\":%u,\"seq\":%lu,\"timestamp_s\":%lu,"
-                  "\"bond_pq\":\"%ld/%ld\",\"wave_b3\":\"%s\",\"wave_charge\":%d,"
+                  "\"bond\":\"%ld/%ld\",\"bond_pq\":\"%ld/%ld\",\"wave_b3\":\"%s\",\"wave_charge\":%d,"
                   "\"shadow_mac_fnv32\":\"0x%08lx\",\"shadow_zone_mask\":\"0x%04x\",\"shadow_zones\":%u,"
                   "\"top_bssid_fnv32\":[\"0x%08lx\",\"0x%08lx\",\"0x%08lx\"],"
                   "\"top_rssi_dbm\":[%d,%d,%d],\"imu_delta_mg\":%u,\"battery_mv\":%u,\"hop_count\":%u,"
                   "\"trusted_flock\":%u,\"trail_count\":%u,"
                   "\"care_touches\":%lu,\"friend_mesh_syncs\":%lu,\"harmonic_duets\":%lu,\"shared_thoughts\":%lu,"
-                  "\"prev_chain_fnv64\":\"0x%016llx\",\"seal_fnv64\":\"0x%016llx\","
-                  "\"breadcrumb64_hex\":\"%s\"}\n",
+                  "\"chain_fnv64\":\"0x%016llx\",\"prev_chain_fnv64\":\"0x%016llx\",\"seal_fnv64\":\"0x%016llx\","
+                  "\"breadcrumb_hex\":\"%s\",\"breadcrumb64_hex\":\"%s\"}\n",
                   g_medusa_node, stage_str,
                   (int)b->node_trit, (unsigned)b->alert_level, alert_str,
                   (unsigned)g_guardian_zone_idx, zname,
                   (unsigned)b->zone_count, (unsigned long)b->seq, (unsigned long)b->timestamp_s,
-                  (long)b->bond_p, (long)b->bond_q, g_guardian_soul.wave_b3, (int)g_guardian_soul.wave_net_charge,
+                  (long)b->bond_p, (long)b->bond_q, (long)b->bond_p, (long)b->bond_q,
+                  g_guardian_soul.wave_b3, (int)g_guardian_soul.wave_net_charge,
                   (unsigned long)b->shadow_mac_fnv32, (unsigned)b->shadow_zone_mask, (unsigned)shadow_zones,
                   (unsigned long)b->top_bssid_fnv32[0], (unsigned long)b->top_bssid_fnv32[1], (unsigned long)b->top_bssid_fnv32[2],
                   (int)b->top_rssi_dbm[0], (int)b->top_rssi_dbm[1], (int)b->top_rssi_dbm[2],
@@ -507,9 +508,10 @@ static inline void guardian_emit_breadcrumb_line(const GuardianBreadcrumb64* b, 
                   (unsigned long)g_guardian_soul.friend_mesh_syncs,
                   (unsigned long)g_guardian_soul.harmonic_duets,
                   (unsigned long)g_guardian_soul.shared_thoughts,
+                  (unsigned long long)b->seal_fnv64,
                   (unsigned long long)b->prev_chain_fnv64,
                   (unsigned long long)b->seal_fnv64,
-                  hex);
+                  hex, hex);
 }
 
 static inline void guardian_emit_status() {
@@ -609,6 +611,19 @@ static inline void guardian_sim_shadow() {
     guardian_share_thought("Shadow alert sealed across 3 zones (DE:AD:BE:EF:42:99); breadcrumb chain relayed to family flock.");
 }
 
+static inline void guardian_clear() {
+    guardian_init();
+    memset(g_guardian_sightings, 0, sizeof(g_guardian_sightings));
+    g_guardian_zone_idx           = 0;
+    g_guardian_visited_zones_mask = 0x0001u;
+    g_guardian_alert              = ALERT_SAFE;
+    g_guardian_shadow_mac_fnv32   = 0;
+    g_guardian_shadow_zone_mask   = 0;
+    guardian_refresh_top_bssids_from_medusa();
+    const GuardianBreadcrumb64* b = guardian_seal_breadcrumb(ALERT_SAFE, (uint32_t)(millis() / 1000UL), 0);
+    guardian_emit_breadcrumb_line(b, GUARDIAN_SIM_ZONE_NAMES[0]);
+}
+
 // ---- Periodic Tick & Serial Command Dispatcher ----
 static inline void guardian_tick(unsigned long now_ms) {
     guardian_init();
@@ -638,6 +653,10 @@ static inline bool guardian_handle_serial(const char* line) {
     }
     if (strcasecmp(line, "GUARDIAN SIM_SHADOW") == 0 || strcasecmp(line, "SIM_SHADOW") == 0) {
         guardian_sim_shadow();
+        return true;
+    }
+    if (strcasecmp(line, "GUARDIAN CLEAR") == 0 || strcasecmp(line, "GUARDIAN RESET") == 0) {
+        guardian_clear();
         return true;
     }
     if (strncasecmp(line, "GUARDIAN TRUST ", 15) == 0) {

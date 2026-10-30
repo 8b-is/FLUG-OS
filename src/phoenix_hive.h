@@ -20,15 +20,15 @@ struct PhoenixBudget {
 static PhoenixMode g_ph_mode = PH_UNKNOWN, g_ph_cand = PH_UNKNOWN;
 static uint64_t    g_ph_cand_since = 0, g_ph_last = 0;
 static bool        g_ph_have_last = false, g_ph_warn_low = false, g_ph_warn_crit = false;
-static PhoenixBudget g_ph_budget = {PH_UNKNOWN, 200, 30, false, 0};
+static PhoenixBudget g_ph_budget = {PH_UNKNOWN, 33, 80, true, 0};
 
 static PhoenixBudget phoenix_budget(PhoenixMode m, int8_t alert) {
     switch (m) {
         case PH_EXTERNAL:
-        case PH_LISTENING: return {m, 100, 80, true, alert};
-        case PH_SAVING:    return {m, 200, 30, false, alert};
-        case PH_CRITICAL:  return {m, 1000, 8, false, alert};
-        default:           return {m, 200, 30, false, alert};
+        case PH_LISTENING: return {m, 25, 85, true, alert};
+        case PH_SAVING:    return {m, 40, 50, true, alert};
+        case PH_CRITICAL:  return {m, 100, 15, false, alert};
+        default:           return {m, 25, 80, true, alert};
     }
 }
 

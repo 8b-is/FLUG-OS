@@ -228,7 +228,10 @@ static bool s3_es7210_init() {
 // ============================================================
 static bool g_es8311_ok = false;
 
+static void s3_es8311_init_i2s();
+
 static bool s3_es8311_init() {
+    s3_es8311_init_i2s(); // Start MCLK before programming codec registers (baye-rust parity)
     if (!s3_i2c_probe(I2C_ADDR_ES8311)) {
         g_es8311_ok = false;
         return false;
@@ -245,27 +248,30 @@ static bool s3_es8311_init() {
     s3_i2c_write8(I2C_ADDR_ES8311, 0x02, 0x00);
     s3_i2c_write8(I2C_ADDR_ES8311, 0x03, 0x10);
     s3_i2c_write8(I2C_ADDR_ES8311, 0x04, 0x10);
-    s3_i2c_write8(I2C_ADDR_ES8311, 0x05, 0x04);
-    s3_i2c_write8(I2C_ADDR_ES8311, 0x06, 0x01);
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x05, 0x00);
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x06, 0x03);
     s3_i2c_write8(I2C_ADDR_ES8311, 0x07, 0x00);
     s3_i2c_write8(I2C_ADDR_ES8311, 0x08, 0xFF);
-
-    s3_i2c_write8(I2C_ADDR_ES8311, 0x09, 0x00);
-    s3_i2c_write8(I2C_ADDR_ES8311, 0x0A, 0x00);
 
     s3_i2c_write8(I2C_ADDR_ES8311, 0x0B, 0x00);
     s3_i2c_write8(I2C_ADDR_ES8311, 0x0C, 0x00);
     s3_i2c_write8(I2C_ADDR_ES8311, 0x10, 0x1F);
     s3_i2c_write8(I2C_ADDR_ES8311, 0x11, 0x7F);
-    delay(50);
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x00, 0x80); // Codec slave, internal digital logic enabled
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x01, 0x3F); // Enable ADC/DAC clocks from MCLK pin
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x09, 0x0C); // 16-bit Philips DAC
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x0A, 0x0C); // 16-bit Philips ADC
+    delay(40);
 
-    s3_i2c_write8(I2C_ADDR_ES8311, 0x17, 0xBF);
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x13, 0x10);
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x17, 0xBF); // ADC digital volume = 0 dB
     s3_i2c_write8(I2C_ADDR_ES8311, 0x0E, 0x02);
     s3_i2c_write8(I2C_ADDR_ES8311, 0x12, 0x00);
-    s3_i2c_write8(I2C_ADDR_ES8311, 0x14, 0xBF);
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x14, 0x1A); // Analog mic selected
     s3_i2c_write8(I2C_ADDR_ES8311, 0x0D, 0x01);
     s3_i2c_write8(I2C_ADDR_ES8311, 0x15, 0x40);
-    s3_i2c_write8(I2C_ADDR_ES8311, 0x1B, 0x05);
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x16, 0x03); // 18 dB analog mic gain
+    s3_i2c_write8(I2C_ADDR_ES8311, 0x1B, 0x0A);
     s3_i2c_write8(I2C_ADDR_ES8311, 0x1C, 0x6A);
     s3_i2c_write8(I2C_ADDR_ES8311, 0x37, 0x08);
     s3_i2c_write8(I2C_ADDR_ES8311, 0x45, 0x00);
@@ -274,14 +280,14 @@ static bool s3_es8311_init() {
     s3_i2c_write8(I2C_ADDR_ES8311, 0x32, 0xD9); // 85% DAC volume
 
     pinMode(PIN_SPEAKER_EN, OUTPUT);
-    digitalWrite(PIN_SPEAKER_EN, HIGH);
+    digitalWrite(PIN_SPEAKER_EN, LOW); // Mute PA until speech/chime so mic captures clean room audio
     g_es8311_ok = true;
     return true;
 }
 
 // ============================================================
-// ES8311 On-Device Formant + {<3,<3,<3}+1 Harmonic Voice TTS
-// Safe across both 1.8" (I2S MCLK=16,BCLK=9,WS=45,DOUT=8) and 2.06"
+// ES8311 On-Device Formant + {<3,<3,<3}+1 Harmonic Voice TTS + Mic Capture
+// Safe across both 1.8" (I2S MCLK=16,BCLK=9,WS=45,DOUT=8,DIN=10) and 2.06" (DIN=42)
 // ============================================================
 static bool     g_i2s_tts_ready = false;
 static uint32_t g_tts_utterances = 0;
@@ -291,7 +297,7 @@ static void s3_es8311_init_i2s() {
     if (g_i2s_tts_ready) return;
     i2s_config_t cfg;
     memset(&cfg, 0, sizeof(cfg));
-    cfg.mode                 = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX);
+    cfg.mode                 = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_RX);
     cfg.sample_rate          = 16000;
     cfg.bits_per_sample      = I2S_BITS_PER_SAMPLE_16BIT;
     cfg.channel_format       = I2S_CHANNEL_FMT_RIGHT_LEFT;
@@ -309,7 +315,7 @@ static void s3_es8311_init_i2s() {
         pins.bck_io_num   = g_board_is_18 ? PIN_I2S_BCLK_18 : PIN_I2S_BCLK_206;
         pins.ws_io_num    = PIN_I2S_LRCLK;
         pins.data_out_num = g_board_is_18 ? PIN_I2S_DOUT_18 : PIN_I2S_DOUT_206;
-        pins.data_in_num  = I2S_PIN_NO_CHANGE;
+        pins.data_in_num  = g_board_is_18 ? PIN_I2S_DIN_18  : PIN_I2S_DIN_206;
         if (i2s_set_pin(I2S_NUM_0, &pins) == ESP_OK) {
             g_i2s_tts_ready = true;
         }
@@ -347,6 +353,7 @@ static void s3_es8311_tts_task(void* arg) {
                 size_t written = 0;
                 i2s_write(I2S_NUM_0, stereo_buf, sizeof(stereo_buf), &written, 20);
             }
+            vTaskDelay(1);
         }
         float f0 = (float)((carrier_hz >= 200 && carrier_hz <= 1200) ? carrier_hz : 432) * 0.35f;
         if (trit > 0) f0 *= 1.12f;
@@ -387,6 +394,7 @@ static void s3_es8311_tts_task(void* arg) {
                 size_t written = 0;
                 i2s_write(I2S_NUM_0, stereo_buf, sizeof(stereo_buf), &written, 20);
             }
+            if ((idx & 1) == 1) vTaskDelay(1);
         }
     }
     digitalWrite(PIN_SPEAKER_EN, LOW);
@@ -407,25 +415,22 @@ static void s3_es8311_speak(const char* text, uint16_t carrier_hz, int8_t trit) 
     xTaskCreatePinnedToCore(s3_es8311_tts_task, "s3_tts", 4096, NULL, 1, NULL, 0);
 }
 
-// Synthesize BICEP - GLUE (130 BPM, C minor: Abmaj7 -> Fm7 -> Cm9 -> Bb6, UK breakbeat + Reese sub + vocal chop)
-static void s3_es8311_play_bicep_glue() {
-    if (!g_es8311_ok) return;
+// Synthesize BICEP - GLUE asynchronously on Core 0 so the 40 FPS AMOLED UI never stalls!
+static void s3_es8311_bicep_task(void* arg) {
+    (void)arg;
     digitalWrite(PIN_SPEAKER_EN, HIGH);
     s3_es8311_init_i2s();
     if (g_i2s_tts_ready) {
-        // 4 chords in C minor (Abmaj7, Fm7, Cm9, Bb6): [bass_hz, pad1_hz, pad2_hz, vox_hz]
         static const float chords[4][4] = {
-            {103.83f, 207.65f, 311.13f, 783.99f}, // Ab2, Ab3, Eb4, G5 (vocal chop "ooh")
-            { 87.31f, 174.61f, 261.63f, 698.46f}, // F2,  F3,  C4,  F5
-            {130.81f, 261.63f, 392.00f, 622.25f}, // C3,  C4,  G4,  Eb5
-            {116.54f, 233.08f, 349.23f, 587.33f}, // Bb2, Bb3, F4,  D5
+            {103.83f, 207.65f, 311.13f, 783.99f},
+            { 87.31f, 174.61f, 261.63f, 698.46f},
+            {130.81f, 261.63f, 392.00f, 622.25f},
+            {116.54f, 233.08f, 349.23f, 587.33f},
         };
-        // 8-step UK breakbeat pattern per chord (kick=1, snare=2, hat=3): K . . K S . K S
         static const uint8_t brk[8] = {1, 3, 3, 1, 2, 3, 1, 2};
         int16_t stereo_buf[256];
         float ph_b1 = 0.0f, ph_b2 = 0.0f, ph_p1 = 0.0f, ph_p2 = 0.0f, ph_vx = 0.0f, ph_k = 0.0f;
         uint32_t lfsr = 0x9A6D44C0u;
-        // 130 BPM -> 1 eighth-note step = ~230 ms = 3692 samples @ 16kHz -> 28 blocks of 128 samples
         for (int ch = 0; ch < 4; ch++) {
             float fb = chords[ch][0], fp1 = chords[ch][1], fp2 = chords[ch][2], fvx = chords[ch][3];
             for (int step = 0; step < 8; step++) {
@@ -434,7 +439,6 @@ static void s3_es8311_play_bicep_glue() {
                     float t_step = (float)(blk * 128) / (14.0f * 128.0f);
                     for (int i = 0; i < 128; i++) {
                         float t = t_step + (float)i / (14.0f * 128.0f);
-                        // Detuned Reese bass (two saw/sine oscillators +0.8% / -0.8%)
                         ph_b1 += (6.2831853f * fb * 0.994f) / 16000.0f;
                         ph_b2 += (6.2831853f * fb * 1.006f) / 16000.0f;
                         ph_p1 += (6.2831853f * fp1) / 16000.0f;
@@ -451,17 +455,16 @@ static void s3_es8311_play_bicep_glue() {
                         float vox_env = (step == 0 || step == 3 || step == 6) ? (0.5f - 0.5f * cosf(6.2831853f * t)) : 0.15f;
                         float vox   = 0.22f * sinf(ph_vx) * vox_env;
 
-                        // Breakbeat percussion transient
                         float drum = 0.0f;
-                        if (hit == 1 && t < 0.45f) { // 909/Break Kick pitch drop
+                        if (hit == 1 && t < 0.45f) {
                             float fk = 52.0f + 110.0f * (1.0f - t * 2.2f);
                             ph_k += (6.2831853f * fk) / 16000.0f;
                             drum = 0.55f * sinf(ph_k) * (1.0f - t * 2.2f);
-                        } else if (hit == 2 && t < 0.55f) { // Breakbeat Snare
+                        } else if (hit == 2 && t < 0.55f) {
                             lfsr ^= lfsr << 13; lfsr ^= lfsr >> 17; lfsr ^= lfsr << 5;
                             float nz = ((float)(int16_t)(lfsr & 0xFFFF) / 32768.0f);
                             drum = (0.35f * nz + 0.20f * sinf(ph_p1 * 1.1f)) * (1.0f - t * 1.8f);
-                        } else if (hit == 3 && t < 0.20f) { // Crisp Hat
+                        } else if (hit == 3 && t < 0.20f) {
                             lfsr ^= lfsr << 13; lfsr ^= lfsr >> 17; lfsr ^= lfsr << 5;
                             float nz = ((float)(int16_t)(lfsr & 0xFFFF) / 32768.0f);
                             drum = 0.14f * nz * (1.0f - t * 5.0f);
@@ -475,10 +478,19 @@ static void s3_es8311_play_bicep_glue() {
                     size_t written = 0;
                     i2s_write(I2S_NUM_0, stereo_buf, sizeof(stereo_buf), &written, 20);
                 }
+                vTaskDelay(1);
             }
         }
     }
     digitalWrite(PIN_SPEAKER_EN, LOW);
+    s_tts_busy = false;
+    vTaskDelete(NULL);
+}
+
+static void s3_es8311_play_bicep_glue() {
+    if (!g_es8311_ok || s_tts_busy) return;
+    s_tts_busy = true;
+    xTaskCreatePinnedToCore(s3_es8311_bicep_task, "s3_bicep", 4096, NULL, 1, NULL, 0);
 }
 
 // ============================================================

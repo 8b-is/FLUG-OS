@@ -7,6 +7,7 @@
 #define FLUGOS_NET_TIME_H
 
 #include <time.h>
+#include <WiFiUdp.h>
 #include <HTTPClient.h>
 #include <HTTPUpdate.h>
 #include <Update.h>
@@ -15,29 +16,38 @@
 #include <BLEUtils.h>
 #include <BLE2902.h>
 
-struct FlugWifiCred {
-    const char* ssid;
-    const char* pass;
+// ---- Anicca (Impermanence) Learn-Share-Forget Wi-Fi Pool (Zero Hardcoded SSIDs!) ----
+#define FLUG_WIFI_POOL_SLOTS 8
+
+struct FlugLearnedWifi {
+    uint8_t  used;
+    uint8_t  ttl_q8;          // 255 = verified/fresh, decays via Anicca when unseen or failing -> 0 = FORGOTTEN
+    uint8_t  is_portal;       // 1 if captive portal auto-accept was used
+    uint8_t  fail_streak;     // consecutive join/portal failures (>= 3 triggers immediate forget)
+    uint16_t success_cnt;     // verified connections (generate_204 ok)
+    int8_t   last_rssi;       // last observed RSSI dBm
+    uint8_t  reserved;
+    char     ssid[33];
+    char     pass[65];
 };
 
-static const FlugWifiCred FLUG_WIFI_APS[] = {
-    {"Rakuten-4CE2",           "EYA5EVQWC2U4GDA9"},
-    {"GlobalWiFi_kdq",         "10674213"},
-    {"BEWIFI-WORK",            "u9rasng8"},
-    {"Buffalo-A-1260",         "y5ijxmy7p5jpe"},
-    {"_manekineko_free_Wi-Fi", "karaokemanekineko"},
-    {"SSID-A2FFA4",            "He74h7Te"},
-    {"W1F\xC2\xA1",            "7576147542!."},
-    {"THE_CAMPUS_WiFi",        ""}
-};
-static const int FLUG_NUM_WIFI_APS = (int)(sizeof(FLUG_WIFI_APS) / sizeof(FLUG_WIFI_APS[0]));
-
-static char          g_net_ssid[33] = "Rakuten-4CE2";
-static char          g_net_pass[65] = "EYA5EVQWC2U4GDA9";
+static FlugLearnedWifi g_wifi_pool[FLUG_WIFI_POOL_SLOTS];
+static char          g_net_ssid[33] = "";
+static char          g_net_pass[65] = "";
 static unsigned long g_net_last_try = 0;
 static bool          g_net_ever = false;
 static int           g_net_last_ok = -1;     // -1 never tried, 0 failed, 1 ok
+static uint8_t       g_net_fail_streak = 0;
 static char          g_net_last_ip[20] = "";
+static char          g_portal_status[32] = "idle";
+static char          g_portal_url[96] = "";
+static uint32_t      g_portal_accept_cnt = 0;
+static uint32_t      g_wifi_learned_cnt = 0;
+static uint32_t      g_wifi_forgotten_cnt = 0;
+static WiFiUDP       g_memnet_udp;
+static bool          g_memnet_udp_ready = false;
+static uint8_t       g_memnet_udp_tx_buf[64] = {0};
+static volatile bool g_memnet_udp_tx_pending = false;
 static bool          g_ota_auto = true;      // Auto-check OTA on net_sync when host is known
 static char          g_ota_last_status[48] = "idle";
 
@@ -83,6 +93,7 @@ static void net_store() {
     if (p.begin("wifi", false)) {
         p.putString("ssid", g_net_ssid);
         p.putString("pass", g_net_pass);
+        p.putBytes("pool", g_wifi_pool, sizeof(g_wifi_pool));
         if (g_host_ip[0]) p.putString("host_ip", g_host_ip);
         if (g_host_port)  p.putUShort("host_port", g_host_port);
         p.putBool("ota_auto", g_ota_auto);
@@ -90,21 +101,102 @@ static void net_store() {
     }
 }
 
+static void net_learn_wifi(const char* ssid, const char* pass, int8_t rssi, bool verified, bool is_portal) {
+    if (!ssid || !ssid[0]) return;
+    int slot = -1;
+    int weakest_slot = 0;
+    uint8_t min_ttl = 255;
+    for (int i = 0; i < FLUG_WIFI_POOL_SLOTS; i++) {
+        if (g_wifi_pool[i].used && strcmp(g_wifi_pool[i].ssid, ssid) == 0) {
+            slot = i;
+            break;
+        }
+        if (!g_wifi_pool[i].used && slot < 0) {
+            slot = i;
+        }
+        if (g_wifi_pool[i].used && g_wifi_pool[i].ttl_q8 < min_ttl) {
+            min_ttl = g_wifi_pool[i].ttl_q8;
+            weakest_slot = i;
+        }
+    }
+    if (slot < 0) slot = weakest_slot;
+
+    bool is_new = !g_wifi_pool[slot].used || (strcmp(g_wifi_pool[slot].ssid, ssid) != 0);
+    g_wifi_pool[slot].used = 1;
+    strncpy(g_wifi_pool[slot].ssid, ssid, sizeof(g_wifi_pool[slot].ssid) - 1);
+    g_wifi_pool[slot].ssid[sizeof(g_wifi_pool[slot].ssid) - 1] = '\0';
+    if (pass && pass[0]) {
+        strncpy(g_wifi_pool[slot].pass, pass, sizeof(g_wifi_pool[slot].pass) - 1);
+        g_wifi_pool[slot].pass[sizeof(g_wifi_pool[slot].pass) - 1] = '\0';
+    } else if (is_new) {
+        g_wifi_pool[slot].pass[0] = '\0';
+    }
+    if (rssi != 0) g_wifi_pool[slot].last_rssi = rssi;
+    if (is_portal) g_wifi_pool[slot].is_portal = 1;
+    if (verified) {
+        g_wifi_pool[slot].ttl_q8      = 255;
+        g_wifi_pool[slot].fail_streak = 0;
+        g_wifi_pool[slot].success_cnt++;
+    } else if (is_new) {
+        g_wifi_pool[slot].ttl_q8      = 140;
+        g_wifi_pool[slot].fail_streak = 0;
+        g_wifi_pool[slot].success_cnt = 0;
+    }
+    if (is_new) g_wifi_learned_cnt++;
+    net_store();
+}
+
+static void net_forget_slot(int slot, const char* reason) {
+    if (slot < 0 || slot >= FLUG_WIFI_POOL_SLOTS || !g_wifi_pool[slot].used) return;
+    char forgotten_ssid[33];
+    strncpy(forgotten_ssid, g_wifi_pool[slot].ssid, sizeof(forgotten_ssid) - 1);
+    forgotten_ssid[sizeof(forgotten_ssid) - 1] = '\0';
+    memset(&g_wifi_pool[slot], 0, sizeof(FlugLearnedWifi));
+    g_wifi_forgotten_cnt++;
+    if (strcmp(g_net_ssid, forgotten_ssid) == 0) {
+        g_net_ssid[0] = '\0';
+        g_net_pass[0] = '\0';
+    }
+    net_store();
+    Serial.printf("# WIFI_FORGET|{\"node\":\"%s\",\"ssid\":\"%s\",\"reason\":\"%s\",\"forgotten_total\":%lu}\n",
+                  g_medusa_node, forgotten_ssid, reason ? reason : "anicca",
+                  (unsigned long)g_wifi_forgotten_cnt);
+}
+
+static void net_forget_ssid(const char* ssid) {
+    if (!ssid || !ssid[0] || strcasecmp(ssid, "ALL") == 0) {
+        for (int i = 0; i < FLUG_WIFI_POOL_SLOTS; i++) {
+            if (g_wifi_pool[i].used) net_forget_slot(i, "manual_forget_all");
+        }
+        g_net_ssid[0] = '\0';
+        g_net_pass[0] = '\0';
+        net_store();
+        return;
+    }
+    for (int i = 0; i < FLUG_WIFI_POOL_SLOTS; i++) {
+        if (g_wifi_pool[i].used && strcmp(g_wifi_pool[i].ssid, ssid) == 0) {
+            net_forget_slot(i, "manual_forget");
+        }
+    }
+}
+
 static void net_load() {
+    memset(g_wifi_pool, 0, sizeof(g_wifi_pool));
     Preferences p;
     if (p.begin("wifi", true)) {
         p.getString("ssid", g_net_ssid, sizeof(g_net_ssid));
         p.getString("pass", g_net_pass, sizeof(g_net_pass));
+        if (p.getBytesLength("pool") == sizeof(g_wifi_pool)) {
+            p.getBytes("pool", g_wifi_pool, sizeof(g_wifi_pool));
+        }
         p.getString("host_ip", g_host_ip, sizeof(g_host_ip));
         uint16_t hp = p.getUShort("host_port", 8089);
         if (hp > 0) g_host_port = hp;
         g_ota_auto = p.getBool("ota_auto", true);
         p.end();
     }
-    if (!g_net_ssid[0] || strcmp(g_net_ssid, "GlobalWiFi_kdq") == 0) {
-        strncpy(g_net_ssid, FLUG_WIFI_APS[0].ssid, sizeof(g_net_ssid) - 1);
-        strncpy(g_net_pass, FLUG_WIFI_APS[0].pass, sizeof(g_net_pass) - 1);
-        net_store();
+    if (g_net_ssid[0]) {
+        net_learn_wifi(g_net_ssid, g_net_pass, -60, false, false);
     }
 }
 
@@ -116,13 +208,60 @@ static int net_seen_ssid_rssi(const char* ssid) {
     return 0;
 }
 
+// Anicca (Impermanence) decay: refresh seen networks, decay unseen/failing networks, and forget expired ones
+static void net_decay_and_forget_pool() {
+    // Also opportunistically learn any strong open network visible in the passive 802.11 table
+    for (int a = 0; a < (int)g_medusa_ap_count; a++) {
+        if (g_medusa_aps[a].used && g_medusa_aps[a].is_open &&
+            g_medusa_aps[a].ssid[0] != '\0' && g_medusa_aps[a].rssi >= -82) {
+            net_learn_wifi(g_medusa_aps[a].ssid, "", g_medusa_aps[a].rssi, false, true);
+        }
+    }
+    for (int i = 0; i < FLUG_WIFI_POOL_SLOTS; i++) {
+        if (!g_wifi_pool[i].used) continue;
+        int seen_r = net_seen_ssid_rssi(g_wifi_pool[i].ssid);
+        if (seen_r != 0) {
+            g_wifi_pool[i].last_rssi = (int8_t)seen_r;
+            if (g_wifi_pool[i].ttl_q8 <= 245) g_wifi_pool[i].ttl_q8 += 10;
+            else g_wifi_pool[i].ttl_q8 = 255;
+        } else {
+            // Network is no longer around us -> decay TTL via Anicca
+            if (g_wifi_pool[i].ttl_q8 > 24) g_wifi_pool[i].ttl_q8 -= 24;
+            else net_forget_slot(i, "anicca_unseen_expired");
+        }
+    }
+}
+
+static const char* net_find_best_open_ssid() {
+    int best_idx = -1;
+    int8_t best_rssi = -95;
+    for (int a = 0; a < (int)g_medusa_ap_count; a++) {
+        if (g_medusa_aps[a].used && g_medusa_aps[a].is_open &&
+            g_medusa_aps[a].ssid[0] != '\0' && g_medusa_aps[a].rssi > best_rssi) {
+            best_rssi = g_medusa_aps[a].rssi;
+            best_idx  = a;
+        }
+    }
+    return (best_idx >= 0) ? g_medusa_aps[best_idx].ssid : nullptr;
+}
+
+static uint8_t net_pool_used_count() {
+    uint8_t c = 0;
+    for (int i = 0; i < FLUG_WIFI_POOL_SLOTS; i++) if (g_wifi_pool[i].used) c++;
+    return c;
+}
+
 static int net_seen_rssi() {
     int r = net_seen_ssid_rssi(g_net_ssid);
     if (r != 0) return r;
-    for (int i = 0; i < FLUG_NUM_WIFI_APS; i++) {
-        r = net_seen_ssid_rssi(FLUG_WIFI_APS[i].ssid);
-        if (r != 0) return r;
+    for (int i = 0; i < FLUG_WIFI_POOL_SLOTS; i++) {
+        if (g_wifi_pool[i].used) {
+            r = net_seen_ssid_rssi(g_wifi_pool[i].ssid);
+            if (r != 0) return r;
+        }
     }
+    const char* open_s = net_find_best_open_ssid();
+    if (open_s) return net_seen_ssid_rssi(open_s);
     return 0;
 }
 
@@ -133,16 +272,247 @@ static void net_ble_notify(const char* msg) {
     }
 }
 
+static void net_emit_pool() {
+    for (int i = 0; i < FLUG_WIFI_POOL_SLOTS; i++) {
+        if (!g_wifi_pool[i].used) continue;
+        int32_t vp = 0, vq = 1;
+        rust_reduce_rational_pq((int32_t)g_wifi_pool[i].ttl_q8, 255, &vp, &vq);
+        Serial.printf("# WIFI_POOL|{\"node\":\"%s\",\"slot\":%d,\"ssid\":\"%s\",\"open\":%d,\"portal\":%u,"
+                      "\"ttl_q8\":%u,\"salience_pq\":\"%ld/%ld\",\"ok_cnt\":%u,\"fails\":%u,\"rssi\":%d}\n",
+                      g_medusa_node, i, g_wifi_pool[i].ssid,
+                      g_wifi_pool[i].pass[0] ? 0 : 1,
+                      (unsigned)g_wifi_pool[i].is_portal,
+                      (unsigned)g_wifi_pool[i].ttl_q8,
+                      (long)vp, (long)vq,
+                      (unsigned)g_wifi_pool[i].success_cnt,
+                      (unsigned)g_wifi_pool[i].fail_streak,
+                      (int)g_wifi_pool[i].last_rssi);
+    }
+}
+
 static void net_emit_status(const char* note) {
-    char buf[256];
+    char buf[340];
     snprintf(buf, sizeof(buf),
              "# WIFI|{\"node\":\"%s\",\"configured\":%d,\"ssid\":\"%s\",\"last\":%d,\"ip\":\"%s\",\"seen_rssi\":%d,"
-             "\"mesh_ch\":%d,\"clock_ok\":%d,\"hour\":%u,\"ble\":%d,\"ota\":\"%s\",\"version\":\"" FLUGOS_VERSION_STR "\",\"note\":\"%s\"}\n",
+             "\"pool_active\":%u,\"learned\":%lu,\"forgotten\":%lu,"
+             "\"mesh_ch\":%d,\"clock_ok\":%d,\"hour\":%u,\"ble\":%d,\"portal\":\"%s\",\"portal_accepts\":%lu,"
+             "\"ota\":\"%s\",\"version\":\"" FLUGOS_VERSION_STR "\",\"note\":\"%s\"}\n",
              g_medusa_node, g_net_ssid[0] ? 1 : 0, g_net_ssid, g_net_last_ok, g_net_last_ip,
-             net_seen_rssi(), (int)g_s3_sun_ch, g_lrn_clock_ok ? 1 : 0, (unsigned)g_lrn_hour,
-             g_ble_active ? 1 : 0, g_ota_last_status, note);
+             net_seen_rssi(), (unsigned)net_pool_used_count(),
+             (unsigned long)g_wifi_learned_cnt, (unsigned long)g_wifi_forgotten_cnt,
+             (int)g_s3_sun_ch, g_lrn_clock_ok ? 1 : 0, (unsigned)g_lrn_hour,
+             g_ble_active ? 1 : 0, g_portal_status, (unsigned long)g_portal_accept_cnt,
+             g_ota_last_status, note);
     Serial.print(buf);
     net_ble_notify(buf);
+}
+
+// Helper: case-insensitive substring search in bounded buffer
+static const char* net_strcasestr_n(const char* hay, const char* needle) {
+    if (!hay || !needle || !*needle) return nullptr;
+    size_t nlen = strlen(needle);
+    for (const char* p = hay; *p; p++) {
+        if (strncasecmp(p, needle, nlen) == 0) return p;
+    }
+    return nullptr;
+}
+
+// Helper: extract attribute value `attr="val"` or `attr='val'` inside an HTML tag
+static bool net_extract_html_attr(const char* tag_start, const char* tag_end, const char* attr, char* out, size_t out_cap) {
+    if (!tag_start || !tag_end || !attr || !out || out_cap == 0) return false;
+    out[0] = '\0';
+    size_t alen = strlen(attr);
+    for (const char* p = tag_start; p + alen < tag_end; p++) {
+        if (strncasecmp(p, attr, alen) == 0) {
+            const char* q = p + alen;
+            while (q < tag_end && (*q == ' ' || *q == '\t')) q++;
+            if (q >= tag_end || *q != '=') continue;
+            q++;
+            while (q < tag_end && (*q == ' ' || *q == '\t')) q++;
+            if (q >= tag_end) break;
+            char quote = 0;
+            if (*q == '"' || *q == '\'') quote = *q++;
+            size_t k = 0;
+            while (q < tag_end && k + 1 < out_cap) {
+                if (quote ? (*q == quote) : (*q == ' ' || *q == '>' || *q == '\r' || *q == '\n')) break;
+                out[k++] = *q++;
+            }
+            out[k] = '\0';
+            return true;
+        }
+    }
+    return false;
+}
+
+// Resolve a relative action URL against a base URL (`http://host[:port]/path`)
+static void net_resolve_url(const char* base_url, const char* rel, char* out, size_t out_cap) {
+    if (!rel || !rel[0]) {
+        strncpy(out, base_url ? base_url : "", out_cap - 1);
+        out[out_cap - 1] = '\0';
+        return;
+    }
+    if (strncasecmp(rel, "http://", 7) == 0 || strncasecmp(rel, "https://", 8) == 0) {
+        strncpy(out, rel, out_cap - 1);
+        out[out_cap - 1] = '\0';
+        return;
+    }
+    // Extract scheme://host[:port] from base_url
+    const char* p = strstr(base_url, "://");
+    if (!p) {
+        snprintf(out, out_cap, "http://%s/%s", WiFi.gatewayIP().toString().c_str(), (rel[0] == '/') ? (rel + 1) : rel);
+        return;
+    }
+    const char* slash = strchr(p + 3, '/');
+    size_t origin_len = slash ? (size_t)(slash - base_url) : strlen(base_url);
+    if (origin_len >= out_cap - 2) origin_len = out_cap - 2;
+    char origin[96];
+    if (origin_len >= sizeof(origin)) origin_len = sizeof(origin) - 1;
+    memcpy(origin, base_url, origin_len);
+    origin[origin_len] = '\0';
+    if (rel[0] == '/') {
+        snprintf(out, out_cap, "%s%s", origin, rel);
+    } else {
+        snprintf(out, out_cap, "%s/%s", origin, rel);
+    }
+}
+
+// ---- Automatic Simple "Accept Button" Captive Portal Detector & Auto-Clicker ----
+static bool net_captive_portal_auto_accept() {
+    if (WiFi.status() != WL_CONNECTED) return false;
+
+    HTTPClient h;
+    const char* header_keys[] = {"Location", "location"};
+    h.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+    h.setTimeout(2500);
+    if (!h.begin("http://connectivitycheck.gstatic.com/generate_204")) return false;
+    h.collectHeaders(header_keys, 2);
+    int code = h.GET();
+    String loc = h.header("Location");
+    if (loc.length() == 0) loc = h.header("location");
+    String body = (code == 200) ? h.getString() : String("");
+    h.end();
+
+    if (code == 204) {
+        strncpy(g_portal_status, "open_204", sizeof(g_portal_status) - 1);
+        return true;
+    }
+
+    // Determine captive portal landing URL from Redirect Location, meta-refresh, or Gateway IP
+    char portal_url[128] = "";
+    if (loc.length() > 0) {
+        strncpy(portal_url, loc.c_str(), sizeof(portal_url) - 1);
+    } else {
+        snprintf(portal_url, sizeof(portal_url), "http://%s/", WiFi.gatewayIP().toString().c_str());
+    }
+    strncpy(g_portal_url, portal_url, sizeof(g_portal_url) - 1);
+
+    // Fetch captive portal HTML if we don't already have it
+    if (body.length() < 16 && portal_url[0]) {
+        HTTPClient hp;
+        hp.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+        hp.setTimeout(3000);
+        if (hp.begin(portal_url)) {
+            int pcode = hp.GET();
+            if (pcode > 0) body = hp.getString();
+            hp.end();
+        }
+    }
+
+    // Parse simple `<form action="..." method="...">` + `<input name="..." value="...">`
+    const char* html = body.c_str();
+    char action_rel[96] = "";
+    char method[12]     = "POST";
+    char form_body[256] = "accept=1&agree=yes&terms=on&buttonClicked=4";
+
+    const char* form_tag = net_strcasestr_n(html, "<form");
+    if (form_tag) {
+        const char* form_tag_end = strchr(form_tag, '>');
+        if (form_tag_end) {
+            net_extract_html_attr(form_tag, form_tag_end, "action", action_rel, sizeof(action_rel));
+            char m_tmp[12] = "";
+            if (net_extract_html_attr(form_tag, form_tag_end, "method", m_tmp, sizeof(m_tmp)) && m_tmp[0]) {
+                strncpy(method, m_tmp, sizeof(method) - 1);
+            }
+            const char* form_close = net_strcasestr_n(form_tag_end, "</form");
+            if (!form_close) form_close = html + strlen(html);
+            const char* inp = form_tag_end;
+            while ((inp = net_strcasestr_n(inp, "<input")) != nullptr && inp < form_close) {
+                const char* inp_end = strchr(inp, '>');
+                if (!inp_end) break;
+                char iname[40] = "", ival[64] = "";
+                if (net_extract_html_attr(inp, inp_end, "name", iname, sizeof(iname)) && iname[0]) {
+                    net_extract_html_attr(inp, inp_end, "value", ival, sizeof(ival));
+                    if (!ival[0]) strncpy(ival, "1", sizeof(ival) - 1);
+                    size_t cur = strlen(form_body);
+                    if (cur + strlen(iname) + strlen(ival) + 3 < sizeof(form_body)) {
+                        snprintf(form_body + cur, sizeof(form_body) - cur, "&%s=%s", iname, ival);
+                    }
+                }
+                inp = inp_end + 1;
+            }
+        }
+    } else {
+        // Check for a direct `<a href="...accept/login...">` accept button link
+        const char* a_tag = html;
+        while ((a_tag = net_strcasestr_n(a_tag, "<a ")) != nullptr) {
+            const char* a_end = strchr(a_tag, '>');
+            if (!a_end) break;
+            char href[96] = "";
+            if (net_extract_html_attr(a_tag, a_end, "href", href, sizeof(href)) &&
+                (net_strcasestr_n(href, "accept") || net_strcasestr_n(href, "login") ||
+                 net_strcasestr_n(href, "agree")  || net_strcasestr_n(href, "auth"))) {
+                strncpy(action_rel, href, sizeof(action_rel) - 1);
+                strncpy(method, "GET", sizeof(method) - 1);
+                break;
+            }
+            a_tag = a_end + 1;
+        }
+    }
+
+    char submit_url[144];
+    net_resolve_url(portal_url, action_rel, submit_url, sizeof(submit_url));
+
+    int submit_code = -1;
+    HTTPClient hs;
+    hs.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+    hs.setTimeout(3000);
+    if (hs.begin(submit_url)) {
+        if (strcasecmp(method, "GET") == 0) {
+            submit_code = hs.GET();
+        } else {
+            hs.addHeader("Content-Type", "application/x-www-form-urlencoded");
+            submit_code = hs.POST((uint8_t*)form_body, strlen(form_body));
+        }
+        hs.end();
+    }
+
+    // Re-check generate_204 after submitting the Captive Portal Accept form
+    int verify_code = -1;
+    HTTPClient hv;
+    hv.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+    hv.setTimeout(2000);
+    if (hv.begin("http://connectivitycheck.gstatic.com/generate_204")) {
+        verify_code = hv.GET();
+        hv.end();
+    }
+
+    g_portal_accept_cnt++;
+    if (verify_code == 204) {
+        strncpy(g_portal_status, "accepted_204", sizeof(g_portal_status) - 1);
+    } else {
+        snprintf(g_portal_status, sizeof(g_portal_status), "submitted_%d", submit_code);
+    }
+
+    char pbuf[256];
+    snprintf(pbuf, sizeof(pbuf),
+             "# PORTAL|{\"node\":\"%s\",\"ssid\":\"%s\",\"ip\":\"%s\",\"gateway\":\"%s\","
+             "\"portal_url\":\"%s\",\"submit_url\":\"%s\",\"submit_http\":%d,\"verify_204\":%d,\"status\":\"%s\"}\n",
+             g_medusa_node, g_net_ssid, WiFi.localIP().toString().c_str(),
+             WiFi.gatewayIP().toString().c_str(), portal_url, submit_url,
+             submit_code, verify_code, g_portal_status);
+    Serial.print(pbuf);
+    net_ble_notify(pbuf);
+    return (verify_code == 204 || (submit_code >= 200 && submit_code < 400));
 }
 
 static bool net_try_join_one(const char* ssid, const char* pass, unsigned long wait_ms) {
@@ -150,7 +520,9 @@ static bool net_try_join_one(const char* ssid, const char* pass, unsigned long w
     esp_wifi_set_promiscuous(false);
     WiFi.begin(ssid, (pass && pass[0]) ? pass : NULL);
     unsigned long t0 = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - t0 < wait_ms) delay(60);
+    while (WiFi.status() != WL_CONNECTED && millis() - t0 < wait_ms) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
     if (WiFi.status() == WL_CONNECTED) {
         strncpy(g_net_ssid, ssid, sizeof(g_net_ssid) - 1);
         strncpy(g_net_pass, pass ? pass : "", sizeof(g_net_pass) - 1);
@@ -163,28 +535,59 @@ static bool net_try_join_one(const char* ssid, const char* pass, unsigned long w
 }
 
 static bool net_connect_best(bool allow_blind = false) {
-    // 1. First try any known AP from FLUG_WIFI_APS that our passive 802.11 scanner has already heard!
-    for (int i = 0; i < FLUG_NUM_WIFI_APS; i++) {
-        if (net_seen_ssid_rssi(FLUG_WIFI_APS[i].ssid) != 0) {
-            if (net_try_join_one(FLUG_WIFI_APS[i].ssid, FLUG_WIFI_APS[i].pass, 3500UL)) return true;
+    // 0. Run Anicca decay & opportunistic open-network learning from passive 802.11 beacons
+    net_decay_and_forget_pool();
+
+    // 1. Try learned networks in g_wifi_pool that are currently visible in the RF spectrum
+    for (int i = 0; i < FLUG_WIFI_POOL_SLOTS; i++) {
+        if (!g_wifi_pool[i].used) continue;
+        int seen_r = net_seen_ssid_rssi(g_wifi_pool[i].ssid);
+        if (seen_r != 0) {
+            if (net_try_join_one(g_wifi_pool[i].ssid, g_wifi_pool[i].pass, 3500UL)) {
+                return true;
+            } else {
+                // Join failed -> penalize TTL & fail_streak, and forget if expired!
+                g_wifi_pool[i].fail_streak++;
+                if (g_wifi_pool[i].fail_streak >= 3 || g_wifi_pool[i].ttl_q8 <= 80) {
+                    net_forget_slot(i, "join_failed_3x");
+                } else {
+                    g_wifi_pool[i].ttl_q8 -= 80;
+                }
+            }
         }
     }
+
+    // 2. Try primary NVS-remembered SSID if visible
     if (g_net_ssid[0] && net_seen_ssid_rssi(g_net_ssid) != 0) {
         if (net_try_join_one(g_net_ssid, g_net_pass, 3500UL)) return true;
     }
-    // Never block the 40 FPS AMOLED HUD with blind Wi-Fi joins unless explicitly requested via CLI/BLE!
+
+    // 3. Opportunistically join the strongest OPEN 2.4GHz network heard right now
+    const char* open_ssid = net_find_best_open_ssid();
+    if (open_ssid && open_ssid[0]) {
+        if (net_try_join_one(open_ssid, "", 3500UL)) {
+            net_learn_wifi(open_ssid, "", (int8_t)WiFi.RSSI(), false, true);
+            return true;
+        }
+    }
+
     if (!allow_blind) return false;
-    // 2. Explicit manual command: try primary laptop Wi-Fi (`Rakuten-4CE2`) and configured NVS SSID
-    if (net_try_join_one(FLUG_WIFI_APS[0].ssid, FLUG_WIFI_APS[0].pass, 4500UL)) return true;
-    if (g_net_ssid[0] && strcmp(g_net_ssid, FLUG_WIFI_APS[0].ssid) != 0) {
-        if (net_try_join_one(g_net_ssid, g_net_pass, 4500UL)) return true;
+
+    // 4. Explicit manual sync: try learned pool entries even if passive beacon hasn't swept their channel yet
+    if (g_net_ssid[0]) {
+        if (net_try_join_one(g_net_ssid, g_net_pass, 4000UL)) return true;
+    }
+    for (int i = 0; i < FLUG_WIFI_POOL_SLOTS; i++) {
+        if (g_wifi_pool[i].used) {
+            if (net_try_join_one(g_wifi_pool[i].ssid, g_wifi_pool[i].pass, 3500UL)) return true;
+        }
     }
     return false;
 }
 
 // Broadcast Wi-Fi credentials (+ optional host IP & OTA trigger) across all 13 channels via ESP-NOW
-// so the other 2 sibling Triad boards automatically join the same Wi-Fi without needing USB/serial!
-static void net_share_wifi_espnow(bool trigger_ota = false) {
+// Executed on Core 0 async worker so the 40 FPS AMOLED UI never stalls!
+static void net_share_wifi_espnow_impl(bool trigger_ota = false) {
     if (!g_s3_espnow_ok || !g_net_ssid[0]) {
         net_emit_status("share skipped (no ssid)");
         return;
@@ -213,7 +616,7 @@ static void net_share_wifi_espnow(bool trigger_ota = false) {
     for (int pass = 0; pass < 2; pass++) {
         for (int i = 0; i < 13; i++) {
             esp_wifi_set_channel(sweep_order[i], WIFI_SECOND_CHAN_NONE);
-            delay(3);
+            vTaskDelay(pdMS_TO_TICKS(3));
             esp_now_send(bcast, (const uint8_t*)&cap, sizeof(cap));
         }
     }
@@ -244,6 +647,7 @@ static void net_on_espnow_twif(const uint8_t* data, int len) {
     if (!rx_ssid[0]) return;
     strncpy(g_net_ssid, rx_ssid, sizeof(g_net_ssid) - 1);
     strncpy(g_net_pass, rx_pass, sizeof(g_net_pass) - 1);
+    net_learn_wifi(rx_ssid, rx_pass, -55, true, rx_pass[0] == '\0');
     if (cap->host_ip[0]) {
         strncpy(g_host_ip, cap->host_ip, sizeof(g_host_ip) - 1);
     }
@@ -346,7 +750,37 @@ static bool net_ota_check_and_update(const char* custom_url = nullptr, bool forc
     return false;
 }
 
-static void net_sync(bool allow_blind = false) {
+static void net_memnet_udp_exchange_while_connected() {
+    if (WiFi.status() != WL_CONNECTED) return;
+    if (!g_memnet_udp_ready) {
+        if (g_memnet_udp.begin(8888)) {
+            g_memnet_udp_ready = true;
+        }
+    }
+    if (!g_memnet_udp_ready) return;
+
+    // Broadcast latest 64-byte MemnetCapsule64 across the Wi-Fi / Captive Portal LAN (UDP 8888)
+    if (g_memnet_udp_tx_pending) {
+        g_memnet_udp_tx_pending = false;
+        IPAddress bcast(255, 255, 255, 255);
+        g_memnet_udp.beginPacket(bcast, 8888);
+        g_memnet_udp.write(g_memnet_udp_tx_buf, 64);
+        g_memnet_udp.endPacket();
+    }
+
+    // Receive any peer MemnetCapsule64 packets over Wi-Fi UDP 8888
+    for (int k = 0; k < 4; k++) {
+        int pktsz = g_memnet_udp.parsePacket();
+        if (pktsz < 64) break;
+        uint8_t rx64[64];
+        int n = g_memnet_udp.read(rx64, 64);
+        if (n >= 64 && rx64[0] == 'N' && rx64[1] == 'M') {
+            memnet_on_espnow_rx(rx64, 64, (int8_t)WiFi.RSSI());
+        }
+    }
+}
+
+static void net_sync_impl(bool allow_blind = false) {
     g_net_last_try = millis();
     g_net_ever = true;
 
@@ -358,24 +792,38 @@ static void net_sync(bool allow_blind = false) {
     }
 
     if (net_connect_best(allow_blind)) {
+        g_net_fail_streak = 0;
         strncpy(g_net_last_ip, WiFi.localIP().toString().c_str(), sizeof(g_net_last_ip) - 1);
+        // 1. Automatically detect and accept simple "Accept Button" Captive Portals!
+        bool portal_ok = net_captive_portal_auto_accept();
+        // 2. Reinforce learned Wi-Fi entry & share verified network with sibling nodes over ESP-NOW TWIF!
+        net_learn_wifi(g_net_ssid, g_net_pass, (int8_t)WiFi.RSSI(), portal_ok, g_net_pass[0] == '\0');
+        if (portal_ok) {
+            net_share_wifi_espnow_impl(false);
+        }
+        // 3. Exchange MemnetCapsule64 waves over Wi-Fi UDP 8888 while on the LAN
+        net_memnet_udp_exchange_while_connected();
+        // 3. Sync NTP clock
         configTime(0, 0, "pool.ntp.org", "time.google.com", "time.cloudflare.com");
         time_t now = 0;
         unsigned long t1 = millis();
-        while ((now = time(nullptr)) < 1700000000 && millis() - t1 < 2500UL) delay(60);
+        while ((now = time(nullptr)) < 1700000000 && millis() - t1 < 2500UL) {
+            vTaskDelay(pdMS_TO_TICKS(60));
+        }
         if (now >= 1700000000) {
             learn_clock_set((long long)now);
             g_net_last_ok = 1;
-            net_emit_status("ntp ok");
+            net_emit_status("ntp + portal ok");
         } else {
             g_net_last_ok = 1;
-            net_emit_status("connected (mesh ch locked)");
+            net_emit_status("connected + portal checked");
         }
         // Automatic OTA version check while connected to Wi-Fi if host IP is known
         if (g_ota_auto && g_host_ip[0]) {
             net_ota_check_and_update(nullptr, false);
         }
     } else {
+        if (g_net_fail_streak < 250) g_net_fail_streak++;
         g_net_last_ok = 0;
         g_net_last_ip[0] = '\0';
         net_emit_status("offline mesh mode");
@@ -398,14 +846,14 @@ static void net_host_set(const char* a) {   // HOST <ip> <port> <token>
     }
 }
 
-static void net_push_say(const char* say, uint32_t seq) {
+static void net_push_say_impl(const char* say, uint32_t seq) {
     if (!g_net_ssid[0] || !g_host_ip[0] || !g_host_port || net_seen_rssi() == 0) return;
     int code = -1;
     if (net_connect_best(false)) {
         HTTPClient h;
         String url = String("http://") + g_host_ip + ":" + String(g_host_port) + "/board/say";
         if (h.begin(url)) {
-            h.setTimeout(4000);
+            h.setTimeout(2500);
             h.addHeader("Content-Type", "application/json");
             h.addHeader("X-Triad-Token", g_host_tok);
             String body = String("{\"node\":\"") + g_medusa_node + "\",\"seq\":" + String((unsigned long)seq) + ",\"say\":\"" + say + "\"}";
@@ -418,6 +866,95 @@ static void net_push_say(const char* say, uint32_t seq) {
     esp_wifi_set_channel((int)g_s3_sun_ch, WIFI_SECOND_CHAN_NONE);
     g_s3_channel = (int)g_s3_sun_ch;
     Serial.printf("# PUSH|{\"node\":\"%s\",\"host\":\"%s:%u\",\"http\":%d}\n", g_medusa_node, g_host_ip, (unsigned)g_host_port, code);
+}
+
+// ---- Non-Blocking Async Queue for Core 0 Network Worker ----
+static volatile bool g_net_req_sync       = false;
+static volatile bool g_net_req_blind_sync = false;
+static volatile bool g_net_req_share      = false;
+static volatile bool g_net_req_share_ota  = false;
+static volatile bool g_net_req_ota_force  = false;
+static volatile bool g_net_req_push       = false;
+static char          g_net_req_ota_url[96] = "";
+static char          g_net_push_say_buf[112] = "";
+static uint32_t      g_net_push_say_seq   = 0;
+static bool          g_net_worker_started = false;
+
+static void net_sync(bool allow_blind = false) {
+    g_net_last_try = millis();
+    g_net_ever = true;
+    if (allow_blind) g_net_req_blind_sync = true;
+    else g_net_req_sync = true;
+}
+
+static void net_share_wifi_espnow(bool trigger_ota = false) {
+    if (trigger_ota) g_net_req_share_ota = true;
+    else g_net_req_share = true;
+}
+
+static void net_push_say(const char* say, uint32_t seq) {
+    if (!say || !say[0] || !g_host_ip[0]) return;
+    strncpy(g_net_push_say_buf, say, sizeof(g_net_push_say_buf) - 1);
+    g_net_push_say_buf[sizeof(g_net_push_say_buf) - 1] = '\0';
+    g_net_push_say_seq = seq;
+    g_net_req_push = true;
+}
+
+static void net_queue_ota(const char* custom_url, bool force) {
+    if (custom_url && custom_url[0]) {
+        strncpy(g_net_req_ota_url, custom_url, sizeof(g_net_req_ota_url) - 1);
+        g_net_req_ota_url[sizeof(g_net_req_ota_url) - 1] = '\0';
+    } else {
+        g_net_req_ota_url[0] = '\0';
+    }
+    g_net_req_ota_force = force;
+}
+
+static void s3_net_async_worker_task(void* arg) {
+    (void)arg;
+    for (;;) {
+        if (g_net_req_share || g_net_req_share_ota) {
+            bool ota = g_net_req_share_ota;
+            g_net_req_share = false;
+            g_net_req_share_ota = false;
+            g_net_busy = true;
+            net_share_wifi_espnow_impl(ota);
+            g_net_busy = false;
+        }
+        if (g_net_req_blind_sync || g_net_req_sync) {
+            bool blind = g_net_req_blind_sync;
+            g_net_req_blind_sync = false;
+            g_net_req_sync = false;
+            g_net_busy = true;
+            net_sync_impl(blind);
+            g_net_busy = false;
+        }
+        if (g_net_req_ota_force) {
+            g_net_req_ota_force = false;
+            char url[96];
+            strncpy(url, g_net_req_ota_url, sizeof(url) - 1);
+            url[sizeof(url) - 1] = '\0';
+            g_net_busy = true;
+            net_ota_check_and_update(url[0] ? url : nullptr, true);
+            g_net_busy = false;
+        }
+        if (g_net_req_push) {
+            g_net_req_push = false;
+            char say[112];
+            strncpy(say, g_net_push_say_buf, sizeof(say) - 1);
+            say[sizeof(say) - 1] = '\0';
+            g_net_busy = true;
+            net_push_say_impl(say, g_net_push_say_seq);
+            g_net_busy = false;
+        }
+        vTaskDelay(pdMS_TO_TICKS(25));
+    }
+}
+
+static void s3_net_async_start_worker() {
+    if (g_net_worker_started) return;
+    g_net_worker_started = true;
+    xTaskCreatePinnedToCore(s3_net_async_worker_task, "s3_net_async", 6144, NULL, 1, NULL, 0);
 }
 
 // ---- BLE Nordic UART Service (accepts `WIFI <ssid> <pass>`, `WIFI SHARE`, `OTA`, etc. from phone/laptop) ----
@@ -437,7 +974,7 @@ class FlugBleServerCallbacks : public BLEServerCallbacks {
 class FlugBleRxCallbacks : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic* pCharacteristic) override {
         if (!pCharacteristic) return;
-        std::string val = pCharacteristic->getValue();
+        auto val = pCharacteristic->getValue();
         if (val.length() > 0) {
             size_t n = val.length();
             if (n >= sizeof(g_ble_cmd_buf)) n = sizeof(g_ble_cmd_buf) - 1;
@@ -483,14 +1020,26 @@ static void net_ble_start() {
                   g_medusa_node, dev_name);
 }
 
-// `WIFI`, `WIFI SYNC`, `WIFI SHARE`, `WIFI CLEAR`, `WIFI <ssid> <password>`
+// `WIFI`, `WIFI POOL`, `WIFI FORGET [ssid]`, `WIFI SYNC`, `WIFI PORTAL`, `WIFI SHARE`, `WIFI <ssid> [password]`
 static void net_command(const char* a) {
     while (*a == ' ') a++;
-    if (!*a) { net_emit_status("status"); return; }
-    if (strcasecmp(a, "SYNC") == 0) { net_sync(true); return; }
+    if (!*a) { net_emit_status("status"); net_emit_pool(); return; }
+    if (strcasecmp(a, "POOL") == 0) { net_decay_and_forget_pool(); net_emit_pool(); return; }
+    if (strcasecmp(a, "SYNC") == 0 || strcasecmp(a, "PORTAL") == 0 || strcasecmp(a, "ACCEPT") == 0) { net_sync(true); return; }
     if (strcasecmp(a, "SHARE") == 0) { net_share_wifi_espnow(false); return; }
     if (strcasecmp(a, "SHARE OTA") == 0) { net_share_wifi_espnow(true); return; }
-    if (strcasecmp(a, "CLEAR") == 0) { g_net_ssid[0] = g_net_pass[0] = '\0'; net_store(); net_emit_status("cleared"); return; }
+    if (strcasecmp(a, "CLEAR") == 0 || strcasecmp(a, "FORGET") == 0) { net_forget_ssid("ALL"); net_emit_status("forgotten_all"); return; }
+    if (strncasecmp(a, "FORGET ", 7) == 0) {
+        const char* target = a + 7;
+        while (*target == ' ') target++;
+        net_forget_ssid(target);
+        net_emit_status("forgotten_ssid");
+        return;
+    }
+    if (strncasecmp(a, "LEARN ", 6) == 0) {
+        a += 6;
+        while (*a == ' ') a++;
+    }
     const char* sp = strchr(a, ' ');
     size_t n = sp ? (size_t)(sp - a) : strlen(a);
     if (n >= sizeof(g_net_ssid)) n = sizeof(g_net_ssid) - 1;
@@ -498,8 +1047,8 @@ static void net_command(const char* a) {
     g_net_ssid[n] = '\0';
     g_net_pass[0] = '\0';
     if (sp) { while (*sp == ' ') sp++; strncpy(g_net_pass, sp, sizeof(g_net_pass) - 1); g_net_pass[sizeof(g_net_pass) - 1] = '\0'; }
-    net_store();
-    // Automatically share the newly provisioned Wi-Fi credentials with the other 2 Triad boards over ESP-NOW!
+    net_learn_wifi(g_net_ssid, g_net_pass, -50, true, g_net_pass[0] == '\0');
+    // Automatically share the newly learned Wi-Fi credentials with the other Triad boards over ESP-NOW!
     net_share_wifi_espnow(false);
     net_sync(true);
 }
@@ -515,7 +1064,7 @@ static void net_tick(unsigned long now) {
                       g_medusa_node, (unsigned)g_net_twif_from_id, g_net_ssid, do_ota ? 1 : 0);
         net_sync();
         if (do_ota) {
-            net_ota_check_and_update(nullptr, true);
+            net_queue_ota(nullptr, true);
         }
     }
     if (now < 6000UL) return;
@@ -523,8 +1072,8 @@ static void net_tick(unsigned long now) {
         net_sync();
         return;
     }
-    // Retry every 45s if offline and passive scan hears a known hotspot, else re-sync every 6h
-    if (g_net_last_ok != 1 && net_seen_rssi() != 0 && (now - g_net_last_try > 45000UL)) {
+    // Retry every 180s (if fail_streak < 2) when passive scan hears a known hotspot, else re-sync every 6h
+    if (g_net_last_ok != 1 && g_net_fail_streak < 2 && net_seen_rssi() != 0 && (now - g_net_last_try > 180000UL)) {
         net_sync();
     } else if (now - g_net_last_try > 6UL * 3600UL * 1000UL) {
         net_sync();
