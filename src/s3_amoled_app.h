@@ -1116,57 +1116,76 @@ static char s3_trit_char(int8_t t) {
 
 static uint8_t g_s3_active_mode = 0;
 
+// Simplified OMNI Cockpit v2.2 UI state + forward declarations
+#ifndef FLUGOS_OMNI_UI_STATE_DECLARED
+#define FLUGOS_OMNI_UI_STATE_DECLARED
+static bool    g_omni_ui_simple   = true;
+static uint8_t g_omni_simple_card = 0; // 0:FindMy 1:Metro 2:Pomo+LLL 3:AC+RFID 4:ZEN+WAVE
+#endif
+static void s3_render_omni_v22_overlay(S3Canvas& c);
+static void s3_draw_zen_findme_compass(S3Canvas& c, int cx, int cy, int inner_r);
+
 static void s3_render_header(S3Canvas& c) {
     int W = (int)g_lcd_w;
-    c.fill_rect(0, 0, W, 40, COL_BG_ELEV);
-    c.draw_hline(0, 40, W, COL_BORDER);
+    int H = (int)g_lcd_h;
+    int hdr_h = (H < 300) ? 32 : 40;
+    c.fill_rect(0, 0, W, hdr_h, COL_BG_ELEV);
+    c.draw_hline(0, hdr_h, W, COL_BORDER);
 
     uint16_t pcol = s3_trit_color(g_triad_self_pole);
-    c.fill_circle(14, 20, 6, pcol);
-    c.draw_circle(14, 20, 9, COL_CYAN);
+    int cy_hdr = hdr_h / 2;
+    c.fill_circle(14, cy_hdr, 6, pcol);
+    c.draw_circle(14, cy_hdr, 9, COL_CYAN);
 
-    const char* hdr_title = (g_triad_self_id == 0) ? "[-1] ADAYE // ANICCA"
+    const char* hdr_title = g_s3_is_tdeck ? "[ 0] TDECK:AYEOS"
+                          : ((g_triad_self_id == 0) ? "[-1] ADAYE // ANICCA"
                           : ((g_triad_self_id == 1) ? "[ 0] VAKED // ANICCA"
-                                                    : "[+1] OMNI  // ANICCA");
-    c.draw_text(28, 7, hdr_title, COL_TEXT, 2);
+                                                    : "[+1] OMNI  // ANICCA"));
+    int qt_w  = (W < 340) ? 58 : 70;
+    int bat_w = (W < 340) ? 58 : 69;
+    int qt_x  = W - qt_w - bat_w - 8;
+    int bat_x = W - bat_w - 4;
+    int max_title_w = qt_x - 32;
+    c.draw_text_fit(28, (H < 300) ? 4 : 7, max_title_w, hdr_title, COL_TEXT, (W < 350) ? 1 : 2);
 
     char sub_hdr[44];
-    snprintf(sub_hdr, sizeof(sub_hdr), "M%02u MEM8 S:%u%% ReM:%u [%u/3]",
-             (unsigned)g_s3_active_mode, g_ms_mean_salience, g_ms_reynolds, s3_triad_online_count());
-    c.draw_text(28, 25, sub_hdr, pcol, 1);
+    snprintf(sub_hdr, sizeof(sub_hdr), "M%02u %ux%u S:%u%% [%u/3]",
+             (unsigned)g_s3_active_mode, (unsigned)g_lcd_w, (unsigned)g_lcd_h,
+             g_ms_mean_salience, s3_triad_online_count());
+    c.draw_text_clipped(28, hdr_h - 14, max_title_w, sub_hdr, pcol, 1);
 
-    int qt_x = W - 150;
-    c.fill_card(qt_x, 6, 70, 28, COL_VIOLET_DARK, COL_VIOLET);
+    c.fill_card(qt_x, 4, qt_w, hdr_h - 8, COL_VIOLET_DARK, COL_VIOLET);
     char qt_buf[16];
     snprintf(qt_buf, sizeof(qt_buf), "qt:%02x %c%c%c",
              g_imu.qt_byte,
              s3_trit_char(g_imu.trit_v),
              s3_trit_char(g_imu.trit_a),
              s3_trit_char(g_imu.trit_d));
-    c.draw_text_centered(qt_x + 35, 16, qt_buf, COL_VIOLET, 1);
+    c.draw_text_centered(qt_x + qt_w / 2, cy_hdr - 4, qt_buf, COL_VIOLET, 1);
 
-    int bat_x = W - 75;
     uint16_t bcol = g_power.charging ? COL_MINT : COL_GOLD;
-    c.fill_card(bat_x, 6, 69, 28, COL_BG_PANEL, bcol);
+    c.fill_card(bat_x, 4, bat_w, hdr_h - 8, COL_BG_PANEL, bcol);
     char b_buf[16];
     snprintf(b_buf, sizeof(b_buf), "%u%% %s",
              g_power.batt_pct, g_power.vbus_good ? "USB" : "BAT");
-    c.draw_text_centered(bat_x + 34, 11, b_buf, bcol, 1);
+    c.draw_text_centered(bat_x + bat_w / 2, (H < 300) ? 8 : 11, b_buf, bcol, 1);
     snprintf(b_buf, sizeof(b_buf), "%umV", g_power.batt_mv);
-    c.draw_text_centered(bat_x + 34, 22, b_buf, COL_SUBTEXT, 1);
+    c.draw_text_centered(bat_x + bat_w / 2, (H < 300) ? 18 : 22, b_buf, COL_SUBTEXT, 1);
 }
 
 static void s3_render_footer_tabs(S3Canvas& c) {
     int W = (int)g_lcd_w;
-    int y = (int)g_lcd_h - 52;
-    c.fill_rect(0, y, W, 52, COL_BG_ELEV);
+    int H = (int)g_lcd_h;
+    int ftr_h = (H < 300) ? 36 : 52;
+    int y = H - ftr_h;
+    c.fill_rect(0, y, W, ftr_h, COL_BG_ELEV);
     c.draw_hline(0, y, W, COL_BORDER);
 
     const char* labels[S3_TAB_COUNT] = {"ZEN", "RADIO", "802.11", "NAND", "QWAVE", "VIZ"};
-    const char* subs[S3_TAB_COUNT]   = {"anicca", "zoneInn", "rf+sinc", "imu+osc", "triad", "enthea"};
+    const char* subs[S3_TAB_COUNT]   = {"omni", "zoneInn", "rf+sinc", "imu+osc", "triad", "enthea"};
     uint16_t cols[S3_TAB_COUNT]      = {COL_MINT, COL_GOLD, COL_CYAN, COL_CORAL, COL_VIOLET, COL_GOLD};
 
-    int gap = 4;
+    int gap = (W < 350) ? 3 : 4;
     int bw  = (W - gap * (S3_TAB_COUNT + 1)) / S3_TAB_COUNT;
 
     for (int i = 0; i < S3_TAB_COUNT; i++) {
@@ -1174,12 +1193,14 @@ static void s3_render_footer_tabs(S3Canvas& c) {
         bool active = (g_s3_active_tab == i);
         uint16_t fill = active ? COL_BG_PANEL : COL_BG;
         uint16_t brd  = active ? cols[i] : COL_BORDER;
-        c.fill_card(bx, y + 5, bw, 42, fill, brd);
+        c.fill_card(bx, y + 4, bw, ftr_h - 8, fill, brd);
         if (active) {
-            c.fill_rect(bx + 10, y + 5, bw - 20, 3, cols[i]);
+            c.fill_rect(bx + 8, y + 4, bw - 16, 3, cols[i]);
         }
-        c.draw_text_centered(bx + bw / 2, y + 14, labels[i], active ? cols[i] : COL_TEXT, 1);
-        c.draw_text_centered(bx + bw / 2, y + 29, subs[i], active ? COL_TEXT : COL_DIM, 1);
+        c.draw_text_centered(bx + bw / 2, y + ((H < 300) ? 9 : 14), labels[i], active ? cols[i] : COL_TEXT, 1);
+        if (H >= 300) {
+            c.draw_text_centered(bx + bw / 2, y + 29, subs[i], active ? COL_TEXT : COL_DIM, 1);
+        }
     }
 }
 
@@ -1190,15 +1211,21 @@ static void s3_render_footer_tabs(S3Canvas& c) {
 static void s3_render_tab_zen(S3Canvas& c) {
     int W  = (int)g_lcd_w;
     int H  = (int)g_lcd_h;
+    int hdr_h = (H < 300) ? 32 : 40;
+    int ftr_h = (H < 300) ? 36 : 52;
     int cx = W / 2;
-    int cy = 40 + (H - 96) / 2 - 6;
-    int outer_r = (W < 380) ? 138 : 156;
-    int inner_r = outer_r - 14;
+    int cy = hdr_h + (H - hdr_h - ftr_h) / 2 - ((H < 300) ? 18 : 26);
+    int max_r_h = (H - hdr_h - ftr_h) / 2 - ((H < 300) ? 28 : 48);
+    int max_r_w = W / 2 - 22;
+    int outer_r = (max_r_h < max_r_w) ? max_r_h : max_r_w;
+    if (outer_r > 148) outer_r = 148;
+    if (outer_r < 54)  outer_r = 54;
+    int inner_r = outer_r - 12;
     int outer_r2 = outer_r * outer_r;
     int inner_r2 = inner_r * inner_r;
 
-    int y_start = (c.y0 > 42) ? c.y0 : 42;
-    int y_end   = (c.y1 < H - 54) ? c.y1 : (H - 54);
+    int y_start = (c.y0 > hdr_h + 2) ? c.y0 : (hdr_h + 2);
+    int y_end   = (c.y1 < H - ftr_h - 2) ? c.y1 : (H - ftr_h - 2);
 
     float sick = g_imu.sickness;
     uint8_t sick_u8 = (uint8_t)(sick * 200.0f);
@@ -1344,6 +1371,9 @@ static void s3_render_tab_zen(S3Canvas& c) {
         c.fill_circle(cent_x, cent_y, 3, COL_MINT);
     }
 
+    // 4b. Precision FindMy / AirTag UWB directional compass needle inside the Zen ring
+    s3_draw_zen_findme_compass(c, cx, cy, inner_r);
+
     // 5. Top & Bottom Impermanence + MarineSense HUD Pills (band-culled so formatted once per frame!)
     if (c.y1 >= 44 && c.y0 <= 54) {
         const S3FavTrack* trk = &S3_FAVOURITES[g_s3_track_idx];
@@ -1353,26 +1383,28 @@ static void s3_render_tab_zen(S3Canvas& c) {
         snprintf(top_lbl, sizeof(top_lbl), "%s // eta:%ld/%ld rec:%lu",
                  trk->title, (long)visP, (long)visQ, (unsigned long)g_ms_ecphoric_recalls);
         top_lbl[38] = '\0';
-        c.draw_text_centered(cx, 45, top_lbl, COL_MINT, 1);
+        c.draw_text_centered(cx, (H < 300) ? 35 : 44, top_lbl, COL_MINT, 1);
     }
 
-    int hud_y = H - 92;
-    if (c.y1 >= hud_y && c.y0 <= hud_y + 36) {
-        c.fill_card(8, hud_y, W - 16, 36, COL_BG_ELEV, COL_BORDER);
-        char hud1[64];
-        snprintf(hud1, sizeof(hud1), "ADA:%s  <3  VAK:%s  <3  OMN:%s",
-                 g_triad_nodes[0].ttl_q8 ? "MEDUSA" : "POLYP",
-                 g_triad_nodes[1].ttl_q8 ? "MEDUSA" : "POLYP",
-                 g_triad_nodes[2].ttl_q8 ? "MEDUSA" : "POLYP");
-        c.draw_text_centered(cx, hud_y + 7, hud1, COL_MINT, 1);
+    if (!g_omni_ui_simple) {
+        int hud_y = H - 92;
+        if (c.y1 >= hud_y && c.y0 <= hud_y + 36) {
+            c.fill_card(8, hud_y, W - 16, 36, COL_BG_ELEV, COL_BORDER);
+            char hud1[64];
+            snprintf(hud1, sizeof(hud1), "ADA:%s  <3  VAK:%s  <3  OMN:%s",
+                     g_triad_nodes[0].ttl_q8 ? "MEDUSA" : "POLYP",
+                     g_triad_nodes[1].ttl_q8 ? "MEDUSA" : "POLYP",
+                     g_triad_nodes[2].ttl_q8 ? "MEDUSA" : "POLYP");
+            c.draw_text_centered(cx, hud_y + 7, hud1, COL_MINT, 1);
 
-        char hud2[64];
-        snprintf(hud2, sizeof(hud2), "SIG:%08lX U:%u ROT:%lu D:%lu",
-                 (unsigned long)g_s3_last_sig_hash,
-                 (unsigned)g_s3_unique_sigs,
-                 (unsigned long)g_s3_mac_rotations,
-                 (unsigned long)g_s3_directed_probes);
-        c.draw_text_centered(cx, hud_y + 21, hud2, COL_GOLD, 1);
+            char hud2[64];
+            snprintf(hud2, sizeof(hud2), "SIG:%08lX U:%u ROT:%lu D:%lu",
+                     (unsigned long)g_s3_last_sig_hash,
+                     (unsigned)g_s3_unique_sigs,
+                     (unsigned long)g_s3_mac_rotations,
+                     (unsigned long)g_s3_directed_probes);
+            c.draw_text_centered(cx, hud_y + 21, hud2, COL_GOLD, 1);
+        }
     }
 }
 
@@ -1858,7 +1890,8 @@ extern uint8_t g_s3_active_mode;
 
 static void s3_render_frame() {
     int H = (int)g_lcd_h;
-    int footer_y = H - 52;
+    int ftr_h = (H < 300) ? 36 : 52;
+    int footer_y = H - ftr_h;
 
     s3_amoled_begin_frame();
     for (int y0 = 0; y0 < H; y0 += AMOLED_BAND_H) {
@@ -1887,6 +1920,9 @@ static void s3_render_frame() {
             case 12: s3_render_mode_mem8(canvas);         break;
             case 13: s3_render_tab_guardian(canvas);      break;
             default: s3_render_tab_zen(canvas);           break;
+        }
+        if (m == 0 && g_omni_ui_simple) {
+            s3_render_omni_v22_overlay(canvas);
         }
         if (y0 + bh > footer_y) {
             s3_render_footer_tabs(canvas);
@@ -1917,7 +1953,8 @@ static void s3_emit_track_event() {
 static void s3_handle_touch() {
     int W = (int)g_lcd_w;
     int H = (int)g_lcd_h;
-    int footer_y = H - 52;
+    int ftr_h = (H < 300) ? 36 : 52;
+    int footer_y = H - ftr_h;
 
     if (g_touch.touched && g_s3_active_mode == 0 && g_touch.y > 44 && g_touch.y < footer_y - 38) {
         int wx = ((int)g_touch.x * (WAVE_POOL_N - 4)) / W + 2;
@@ -1931,6 +1968,15 @@ static void s3_handle_touch() {
     if (!g_touch.just_pressed) return;
     uint16_t tx = g_touch.x;
     uint16_t ty = g_touch.y;
+
+    // Tapping bottom OMNI Cockpit v2.2 card on Tab 0 cycles through the 5 cards (FindMy / Metro / Pomo+LLL / AC+RFID / ZEN+WAVE)
+    int omni_card_h = (H < 300) ? 58 : 88;
+    int omni_card_y = H - ftr_h - omni_card_h - 4;
+    if (g_s3_active_mode == 0 && g_omni_ui_simple && ty >= omni_card_y && ty < footer_y) {
+        g_omni_simple_card = (uint8_t)((g_omni_simple_card + 1) % 5);
+        s3_wave_pool_splash(32, 32, 6400, 5);
+        return;
+    }
 
     // Tapping top header steps through all 14 modes (0..13): left = prev, right = next
     if (ty <= 42) {
@@ -2058,6 +2104,84 @@ static void s3_handle_touch() {
 #include "net_time.h"
 #include "pranayama.h"
 #include "guardian_mesh.h"
+#include "omni_cockpit_v22.h"
+
+// ============================================================
+// OMNI Cockpit v2.2 Simplified Overlay & FindMy Compass Renderer
+// ============================================================
+static void s3_draw_zen_findme_compass(S3Canvas& c, int cx, int cy, int inner_r) {
+    if (!g_omni_ui_simple || g_omni_simple_card != 0) return;
+    int ring_r = (inner_r < 80) ? 22 : 34;
+    if (c.y1 >= cy - ring_r - 4 && c.y0 <= cy + ring_r + 4) {
+        c.draw_circle(cx, cy, ring_r, COL_MINT);
+        c.draw_circle(cx, cy, ring_r - 4, COL_CYAN);
+        omni_draw_findme_arrow(c, cx, cy, ring_r - 8, g_findme.bearing_deg, COL_GOLD);
+    }
+}
+
+static void s3_render_omni_v22_overlay(S3Canvas& c) {
+    if (!g_omni_ui_simple) return;
+    int W = (int)g_lcd_w;
+    int H = (int)g_lcd_h;
+    int ftr_h = (H < 300) ? 36 : 52;
+    int hud_h = (H < 300) ? 32 : 36;
+    int hud_y = H - ftr_h - hud_h - 4;
+    if (c.y1 < hud_y || c.y0 > hud_y + hud_h + 2) return;
+
+    c.fill_card(8, hud_y, W - 16, hud_h, COL_BG_ELEV, COL_MINT);
+    uint8_t oct = omni_bearing_octant(g_findme.bearing_deg);
+    static const uint8_t card_kanji_map[5] = {0, 4, 6, 5, 7}; // 0:北, 4:駅, 6:集, 5:森, 7:親
+    omni_draw_findme_arrow(c, 25, hud_y + hud_h / 2, (hud_h < 36) ? 9 : 11, g_findme.bearing_deg, COL_MINT);
+    omni_draw_kanji_8x8(c, W - 28, hud_y + (hud_h - 16) / 2, card_kanji_map[g_omni_simple_card % 5], COL_GOLD, 2);
+
+    char line1[64];
+    char line2[64];
+    if (g_omni_simple_card == 0) {
+        snprintf(line1, sizeof(line1), "FINDME %s %s  %ld/%ldm",
+                 OMNI_ARROW_ASCII[oct], g_findme.target_id,
+                 (long)g_findme.dist_m_p, (long)g_findme.dist_m_q);
+        snprintf(line2, sizeof(line2), "%s | %ddBm | %uBPM [%s]",
+                 OMNI_PROX_EN[g_findme.proximity_zone], (int)g_findme.rssi_dbm,
+                 (unsigned)g_findme.pulse_bpm, omni_lang_name(g_omni_lang));
+    } else if (g_omni_simple_card == 1) {
+        omni_metro_refresh_parents_note();
+        const OmniMetroStation* sf = &OMNI_TOKYO_STATIONS[g_metro.from_idx & 7];
+        const OmniMetroStation* st = &OMNI_TOKYO_STATIONS[g_metro.to_idx & 7];
+        const OmniRfidTagRecord* suica = omni_rfid_current_suica();
+        snprintf(line1, sizeof(line1), "METRO %s(%s)->%s(%s) %um",
+                 sf->code, sf->name_en, st->code, st->name_en, (unsigned)g_metro.eta_min);
+        snprintf(line2, sizeof(line2), "PARENTS: %s | Suica %luY | Bond %ld/%ld",
+                 GUARDIAN_ALERT_NAMES[g_guardian_alert & 3],
+                 (unsigned long)suica->balance_yen,
+                 (long)g_guardian_soul.bond_p, (long)g_guardian_soul.bond_q);
+    } else if (g_omni_simple_card == 2) {
+        const OmniLllCard* card = &OMNI_LLL_DECK[g_pomo_lll.card_idx % 6];
+        const char* ph_str = (g_pomo_lll.phase == 0) ? "25M" : ((g_pomo_lll.phase == 1) ? "5M" : "15M");
+        snprintf(line1, sizeof(line1), "POMO %02lu:%02lu [%s] #%u",
+                 (unsigned long)(g_pomo_lll.remaining_s / 60),
+                 (unsigned long)(g_pomo_lll.remaining_s % 60),
+                 ph_str,
+                 (unsigned)g_pomo_lll.completed_pomos);
+        snprintf(line2, sizeof(line2), "LLL %s | Mastery %ld/%ld",
+                 card->topic, (long)g_pomo_lll.mastery_p, (long)g_pomo_lll.mastery_q);
+    } else if (g_omni_simple_card == 3) {
+        const OmniRfidTagRecord* rf = &g_rfid_tags[g_rfid_active_idx % g_rfid_count];
+        snprintf(line1, sizeof(line1), "AC:%s %luB Stars:%u* Turnip:%ld/%ld",
+                 g_ac_game.island_name, (unsigned long)g_ac_game.bells,
+                 (unsigned)g_ac_game.island_stars, (long)g_ac_game.turnip_p, (long)g_ac_game.turnip_q);
+        snprintf(line2, sizeof(line2), "RFID:%s %s (%luY)",
+                 OMNI_RFID_PROTO_NAMES[rf->proto % 6], rf->station_code, (unsigned long)rf->balance_yen);
+    } else {
+        snprintf(line1, sizeof(line1), "ZEN+WAVE %uHz ReM:%u [%u/3]",
+                 (unsigned)g_medusa_freq_hz, (unsigned)g_ms_reynolds, (unsigned)s3_triad_online_count());
+        snprintf(line2, sizeof(line2), "HOTSPOT:%s SIG:%u SPL:%lu",
+                 net_hotspot_tier_name(g_hotspot_active_tier),
+                 (unsigned)g_s3_unique_sigs, (unsigned long)g_wp_splashes);
+    }
+    int max_txt_w = W - 76;
+    c.draw_text_clipped(42, hud_y + ((hud_h < 36) ? 5 : 6), max_txt_w, line1, COL_MINT, 1);
+    c.draw_text_clipped(42, hud_y + ((hud_h < 36) ? 18 : 20), max_txt_w, line2, COL_GOLD, 1);
+}
 
 static void s3_render_tab_guardian(S3Canvas& c) {
     int W  = (int)g_lcd_w;
@@ -2584,6 +2708,8 @@ static void s3_handle_serial(const char* line) {
         net_host_set(line + 5);
     } else if (strncasecmp(line, "wifi", 4) == 0 && (line[4] == 0 || line[4] == 0x20)) {
         net_command(line + 4);
+    } else if (strncasecmp(line, "hotspot", 7) == 0 && (line[7] == 0 || line[7] == 0x20)) {
+        net_hotspot_command(line + 7);
     } else if (strcasecmp(line, "SHARE") == 0 || strcasecmp(line, "WIFISHARE") == 0) {
         net_share_wifi_espnow(false);
     } else if (strncasecmp(line, "ota", 3) == 0 && (line[3] == 0 || line[3] == 0x20)) {
@@ -2773,6 +2899,9 @@ static void s3_handle_serial(const char* line) {
         // Handled by Chiro Guardian Tamagotchi Safety Mesh (GUARDIAN, GUARDIAN STATUS, GUARDIAN SIM_SHADOW, GUARDIAN CLEAR, GUARDIAN TRUST, GUARDIAN THOUGHT)
         g_s3_guardian_hud = true;
         g_s3_active_mode  = 13;
+    } else if (omni_cockpit_handle_serial(line)) {
+        // Handled by OMNI Cockpit v2.2 (FINDME, RFID, AC, POMO, LLL, METRO, PARENTS, NIHONGO, UI, SCREEN)
+        s3_wave_pool_splash(32, 32, 7400, 6);
     }
 }
 
@@ -2796,10 +2925,15 @@ static void s3_amoled_setup() {
         g_s3_ch_pkts[i] = 0;
     }
 
+    // Read factory STA MAC early so s3_detect_and_reset_display() can also identify T-Deck (CC:BA:97:00:45:24)
+    WiFi.mode(WIFI_MODE_STA);
+    WiFi.disconnect();
+    esp_wifi_get_mac(WIFI_IF_STA, g_s3_mac);
+
     Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, 400000);
     bool pmic_ok   = s3_axp2101_init();
-    delay(30);
-    bool is_18     = s3_tca9554_init_and_reset();
+    delay(60); // Wait 60ms after AXP2101 power rail enable so FT3168 touch controller finishes POR before I2C probe
+    bool is_18     = s3_detect_and_reset_display(g_s3_mac);
     bool audio_ok  = s3_es8311_init();
     bool es7210_ok = s3_es7210_init();
 
@@ -2810,9 +2944,6 @@ static void s3_amoled_setup() {
     s3_axp2101_poll();
     s3_imu_poll();
 
-    WiFi.mode(WIFI_MODE_STA);
-    WiFi.disconnect();
-    esp_wifi_get_mac(WIFI_IF_STA, g_s3_mac);
     s3_triad_assign_identity();
 
     if (esp_now_init() == ESP_OK) {
@@ -2839,19 +2970,23 @@ static void s3_amoled_setup() {
     s3_espnow_broadcast(32, 32, 8200);
     s3_render_frame();
 
+    const char* board_label = g_s3_is_tdeck
+        ? "LILYGO-T-Deck-Plus-320x240"
+        : (is_18 ? "ESP32-S3-Touch-AMOLED-1.8" : "ESP32-S3-Touch-AMOLED-2.06");
+
     Serial.printf("\r\n");
     Serial.printf("  ╔══════════════════════════════════════════════════════════╗\r\n");
     Serial.printf("  ║  FLUG-OS {-1, 0, +1}  " FLUGOS_FULL_VERSION "  MARINESENSE     ║\r\n");
     Serial.printf("  ║  Node [%+d] %-10s : %-20s (%ux%u) ║\r\n",
                   (int)g_triad_self_pole, g_medusa_node,
-                  is_18 ? "ESP32-S3-AMOLED-1.8" : "ESP32-S3-AMOLED-2.06",
+                  board_label,
                   g_lcd_w, g_lcd_h);
     Serial.printf("  ╚══════════════════════════════════════════════════════════╝\r\n");
     Serial.printf("{\"boot\":\"ok\",\"board\":\"%s\",\"persona\":\"%s\",\"medusa_node\":\"%s\","
                   "\"vertex\":\"%s\",\"archetype\":\"%s\",\"freq_hz\":%u,\"trit\":%d,"
                   "\"lcd\":\"%ux%u\",\"lcd_driver\":\"%s\",\"pmic\":%d,\"amoled\":%d,\"imu\":%d,\"es8311\":%d,\"es7210\":%d,\"espnow\":%d,"
                   "\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\"}\r\n",
-                  is_18 ? "ESP32-S3-Touch-AMOLED-1.8" : "ESP32-S3-Touch-AMOLED-2.06",
+                  board_label,
                   g_triad_persona, g_medusa_node, g_medusa_vertex_json, g_medusa_archetype,
                   (unsigned)g_medusa_freq_hz, (int)g_triad_self_pole,
                   g_lcd_w, g_lcd_h, g_lcd_driver_name,
@@ -2872,6 +3007,8 @@ static void s3_amoled_setup() {
     s3_emit_gaia_line();
     mem8_emit_wave(mem8_latest_wave());
     guardian_emit_status();
+    omni_screen_emit_json();
+    omni_findme_emit_json();
 }
 
 static void s3_amoled_loop() {
@@ -2952,6 +3089,7 @@ static void s3_amoled_loop() {
     net_tick(now);
     guardian_tick(now);
     mem8_tick(now);
+    omni_pomo_tick(now);
     if (g_ble_cmd_pending) {
         g_ble_cmd_pending = false;
         char ble_line[128];

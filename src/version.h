@@ -11,14 +11,14 @@
 #define FLUGOS_VERSION_H
 
 #define FLUGOS_VERSION_MAJOR  2
-#define FLUGOS_VERSION_MINOR  1
+#define FLUGOS_VERSION_MINOR  2
 #define FLUGOS_VERSION_PATCH  0
-#define FLUGOS_VERSION_STR    "2.1.0"
-#define FLUGOS_VERSION_STRING "2.1.0"
+#define FLUGOS_VERSION_STR    "2.2.0"
+#define FLUGOS_VERSION_STRING "2.2.0"
 
 /* Build metadata — populated by PlatformIO build_flags if set */
 #ifndef FLUGOS_COMMIT
-#define FLUGOS_COMMIT         "guardian-tamagotchi-mesh"
+#define FLUGOS_COMMIT         "omni-findme-rfid-ac-pomodoro-metro-jp"
 #endif
 
 #define FLUGOS_FULL_VERSION   "v" FLUGOS_VERSION_STR "+" FLUGOS_COMMIT
@@ -40,6 +40,7 @@
 #define FLUGOS_HAS_VIZ_TTS_OMNI   1   /* v1.0.0: viz.8b.is ENTHEA V1 shader bridge + ES8311 Formant/Harmonic TTS + {<3,<3,<3}+1 */
 #define FLUGOS_HAS_ULTRA_OMNI_GAIA_EVOLVE 1 /* v1.6.0: ULTRA-OMNI-GAIA-EVOLVE + brother & sister ^^ <3<3 + 8b-is//riva.8b.is */
 #define FLUGOS_HAS_RIVA_DYAD      1   /* v1.6.0: RIVA 1-bit river (4s in, 4s out) lullaby & 13-ch sibling wake-up */
+#define FLUGOS_HAS_OMNI_COCKPIT_V22 1 /* v2.2.0: FindMy arrow, multi-protocol RFID/FeliCa, Animal Crossing x Olegsiv, JP Kanji, Simple UI, Pomodoro 25/5+LLL, Tokyo Metro+Parents */
 #define FLUGOS_HAS_MEMNET_EXPORT  0   /* v1.1.0: ayeOS capsule over UART*/
 #define FLUGOS_HAS_PWM_AUDIO      0   /* v1.2.0: GPIO headphone synth   */
 #define FLUGOS_HAS_PCAP_EXPORT    0   /* v1.3.0: Wireshark over UART    */

@@ -23,10 +23,10 @@ struct FlugLearnedWifi {
     uint8_t  used;
     uint8_t  ttl_q8;          // 255 = verified/fresh, decays via Anicca when unseen or failing -> 0 = FORGOTTEN
     uint8_t  is_portal;       // 1 if captive portal auto-accept was used
-    uint8_t  fail_streak;     // consecutive join/portal failures (>= 3 triggers immediate forget)
+    uint8_t  fail_streak;     // consecutive join/portal failures (>= 3 triggers immediate forget for ephemeral slots)
     uint16_t success_cnt;     // verified connections (generate_204 ok)
     int8_t   last_rssi;       // last observed RSSI dBm
-    uint8_t  reserved;
+    uint8_t  hotspot_tier;    // 0=ephemeral, 1=pinned user, 2=GL.iNet/GlobalWiFi router, 3=Samsung Galaxy S25 Ultra
     char     ssid[33];
     char     pass[65];
 };
@@ -44,6 +44,11 @@ static char          g_portal_url[96] = "";
 static uint32_t      g_portal_accept_cnt = 0;
 static uint32_t      g_wifi_learned_cnt = 0;
 static uint32_t      g_wifi_forgotten_cnt = 0;
+static bool          g_hotspot_keepalive = true;
+static uint8_t       g_hotspot_active_tier = 0;
+static uint32_t      g_hotspot_join_ms = 0;
+static uint8_t       g_hotspot_last_ch = 0;
+static bool          g_net_prev_seen_hotspot = false;
 static WiFiUDP       g_memnet_udp;
 static bool          g_memnet_udp_ready = false;
 static uint8_t       g_memnet_udp_tx_buf[64] = {0};
@@ -102,12 +107,45 @@ static void net_store() {
     }
 }
 
-static void net_learn_wifi(const char* ssid, const char* pass, int8_t rssi, bool verified, bool is_portal) {
+// Classify hotspot tier: 3=Samsung Galaxy S25 Ultra, 2=GL.iNet/GlobalWiFi travel router, 1=user-pinned/WPA, 0=ephemeral
+static uint8_t net_classify_hotspot_tier(const char* ssid, const char* pass, uint8_t explicit_tier = 0) {
+    if (explicit_tier >= 2) return explicit_tier;
+    if (!ssid || !ssid[0]) return 0;
+    if (strncasecmp(ssid, "Galaxy", 6) == 0 ||
+        strncasecmp(ssid, "SM-S928", 7) == 0 ||
+        strncasecmp(ssid, "S25", 3) == 0 ||
+        strncasecmp(ssid, "W1F", 3) == 0 ||
+        strncasecmp(ssid, "AndroidAP", 9) == 0) {
+        return 3; // Samsung Galaxy S25 Ultra Mobile Hotspot
+    }
+    if (strncasecmp(ssid, "GL-", 3) == 0 ||
+        strncasecmp(ssid, "GlobalWiFi", 10) == 0 ||
+        strncasecmp(ssid, "Rakuten", 7) == 0 ||
+        strncasecmp(ssid, "Beryl", 5) == 0 ||
+        strncasecmp(ssid, "Slate", 5) == 0 ||
+        strncasecmp(ssid, "Mudi", 4) == 0) {
+        return 2; // GL.iNet / GlobalWiFi Travel Router
+    }
+    if (explicit_tier == 1 || (pass && pass[0] != '\0')) {
+        return 1; // User-provisioned WPA2/WPA3 hotspot
+    }
+    return 0;
+}
+
+static const char* net_hotspot_tier_name(uint8_t tier) {
+    if (tier >= 3) return "GALAXY_S25_ULTRA";
+    if (tier == 2) return "GL_INET_ROUTER";
+    if (tier == 1) return "PINNED_WPA";
+    return "ANICCA_OPEN";
+}
+
+static void net_learn_wifi(const char* ssid, const char* pass, int8_t rssi, bool verified, bool is_portal, uint8_t explicit_tier = 0) {
     if (!ssid || !ssid[0]) return;
+    uint8_t incoming_tier = net_classify_hotspot_tier(ssid, pass, explicit_tier);
     int slot = -1;
     int weakest_unverified_slot = -1;
     uint8_t min_unverified_ttl = 255;
-    int weakest_any_slot = 0;
+    int weakest_any_slot = -1;
     uint8_t min_any_ttl = 255;
 
     for (int i = 0; i < FLUG_WIFI_POOL_SLOTS; i++) {
@@ -119,11 +157,13 @@ static void net_learn_wifi(const char* ssid, const char* pass, int8_t rssi, bool
             slot = i;
         }
         if (g_wifi_pool[i].used) {
-            if (g_wifi_pool[i].ttl_q8 < min_any_ttl) {
+            // Never evict Galaxy Ultra (tier 3) or GL Router (tier 2) slots for lower-tier networks
+            if (g_wifi_pool[i].hotspot_tier <= incoming_tier && g_wifi_pool[i].ttl_q8 < min_any_ttl) {
                 min_any_ttl = g_wifi_pool[i].ttl_q8;
                 weakest_any_slot = i;
             }
-            if (g_wifi_pool[i].success_cnt == 0 && g_wifi_pool[i].ttl_q8 < min_unverified_ttl) {
+            if (g_wifi_pool[i].hotspot_tier == 0 && g_wifi_pool[i].success_cnt == 0 &&
+                g_wifi_pool[i].ttl_q8 < min_unverified_ttl) {
                 min_unverified_ttl = g_wifi_pool[i].ttl_q8;
                 weakest_unverified_slot = i;
             }
@@ -132,7 +172,7 @@ static void net_learn_wifi(const char* ssid, const char* pass, int8_t rssi, bool
     if (slot < 0) {
         if (weakest_unverified_slot >= 0) {
             slot = weakest_unverified_slot;
-        } else if (verified || min_any_ttl < 64) {
+        } else if ((verified || incoming_tier >= 2 || min_any_ttl < 64) && weakest_any_slot >= 0) {
             slot = weakest_any_slot;
         } else {
             // Preserve attested/verified pool entries against unverified beacon eviction
@@ -149,7 +189,7 @@ static void net_learn_wifi(const char* ssid, const char* pass, int8_t rssi, bool
     g_wifi_pool[slot].ssid[sizeof(g_wifi_pool[slot].ssid) - 1] = '\0';
 
     if (pass && pass[0]) {
-        if (verified || !was_verified || !had_pass) {
+        if (verified || incoming_tier >= 2 || !was_verified || !had_pass) {
             strncpy(g_wifi_pool[slot].pass, pass, sizeof(g_wifi_pool[slot].pass) - 1);
             g_wifi_pool[slot].pass[sizeof(g_wifi_pool[slot].pass) - 1] = '\0';
             g_wifi_pool[slot].is_portal = 0;
@@ -159,16 +199,21 @@ static void net_learn_wifi(const char* ssid, const char* pass, int8_t rssi, bool
         g_wifi_pool[slot].is_portal = is_portal ? 1 : 0;
     }
 
+    uint8_t final_tier = net_classify_hotspot_tier(g_wifi_pool[slot].ssid, g_wifi_pool[slot].pass, explicit_tier);
+    if (is_new || final_tier > g_wifi_pool[slot].hotspot_tier) {
+        g_wifi_pool[slot].hotspot_tier = final_tier;
+    }
+
     if (rssi != 0) g_wifi_pool[slot].last_rssi = rssi;
     if (is_portal && g_wifi_pool[slot].pass[0] == '\0') {
         g_wifi_pool[slot].is_portal = 1;
     }
-    if (verified) {
+    if (verified || g_wifi_pool[slot].hotspot_tier >= 2) {
         g_wifi_pool[slot].ttl_q8      = 255;
         g_wifi_pool[slot].fail_streak = 0;
-        g_wifi_pool[slot].success_cnt++;
+        if (verified) g_wifi_pool[slot].success_cnt++;
     } else if (is_new) {
-        g_wifi_pool[slot].ttl_q8      = 140;
+        g_wifi_pool[slot].ttl_q8      = (g_wifi_pool[slot].hotspot_tier >= 1) ? 220 : 140;
         g_wifi_pool[slot].fail_streak = 0;
         g_wifi_pool[slot].success_cnt = 0;
     }
@@ -230,17 +275,30 @@ static void net_load() {
     }
 }
 
-// RSSI of a given SSID if the passive scan has seen it, else 0.
-static int net_seen_ssid_rssi(const char* ssid) {
+// Lookup strongest visible AP entry for a given SSID in passive 802.11 table (returns RSSI, channel, and BSSID)
+static int net_find_seen_ap(const char* ssid, uint8_t* out_ch = nullptr, uint8_t* out_bssid = nullptr) {
     if (!ssid || !ssid[0]) return 0;
-    for (int a = 0; a < (int)g_medusa_ap_count; a++)
-        if (g_medusa_aps[a].used && strcmp(g_medusa_aps[a].ssid, ssid) == 0) return g_medusa_aps[a].rssi;
-    return 0;
+    int best_rssi = 0;
+    for (int a = 0; a < (int)g_medusa_ap_count; a++) {
+        if (g_medusa_aps[a].used && strcmp(g_medusa_aps[a].ssid, ssid) == 0) {
+            if (best_rssi == 0 || g_medusa_aps[a].rssi > best_rssi) {
+                best_rssi = g_medusa_aps[a].rssi;
+                if (out_ch) *out_ch = g_medusa_aps[a].ch;
+                if (out_bssid) memcpy(out_bssid, g_medusa_aps[a].bssid, 6);
+            }
+        }
+    }
+    return best_rssi;
 }
 
-// Anicca (Impermanence) decay: refresh seen networks, decay unseen/failing networks, and forget expired ones
+// RSSI of a given SSID if the passive scan has seen it, else 0.
+static int net_seen_ssid_rssi(const char* ssid) {
+    return net_find_seen_ap(ssid, nullptr, nullptr);
+}
+
+// Anicca (Impermanence) decay: refresh seen networks, decay unseen ephemeral networks, and preserve Galaxy/GL/pinned hotspots
 static void net_decay_and_forget_pool() {
-    // Also opportunistically learn any strong open network visible in the passive 802.11 table
+    // Opportunistically learn strong open networks visible in the passive 802.11 table
     for (int a = 0; a < (int)g_medusa_ap_count; a++) {
         if (g_medusa_aps[a].used && g_medusa_aps[a].is_open &&
             g_medusa_aps[a].ssid[0] != '\0' && g_medusa_aps[a].rssi >= -82) {
@@ -249,13 +307,19 @@ static void net_decay_and_forget_pool() {
     }
     for (int i = 0; i < FLUG_WIFI_POOL_SLOTS; i++) {
         if (!g_wifi_pool[i].used) continue;
+        if (g_wifi_pool[i].hotspot_tier == 0 && g_wifi_pool[i].pass[0] != '\0') {
+            g_wifi_pool[i].hotspot_tier = net_classify_hotspot_tier(g_wifi_pool[i].ssid, g_wifi_pool[i].pass, 1);
+        }
         int seen_r = net_seen_ssid_rssi(g_wifi_pool[i].ssid);
         if (seen_r != 0) {
             g_wifi_pool[i].last_rssi = (int8_t)seen_r;
             if (g_wifi_pool[i].ttl_q8 <= 245) g_wifi_pool[i].ttl_q8 += 10;
             else g_wifi_pool[i].ttl_q8 = 255;
+        } else if (g_wifi_pool[i].hotspot_tier >= 1) {
+            // Sovereign Galaxy Ultra (3), GL Router (2), and pinned WPA (1) hotspots never expire when out of range
+            if (g_wifi_pool[i].ttl_q8 < 200) g_wifi_pool[i].ttl_q8 = 200;
         } else {
-            // Network is no longer around us -> decay TTL via Anicca
+            // Ephemeral open network is no longer around us -> decay TTL via Anicca
             if (g_wifi_pool[i].ttl_q8 > 24) g_wifi_pool[i].ttl_q8 -= 24;
             else net_forget_slot(i, "anicca_unseen_expired");
         }
@@ -282,14 +346,20 @@ static uint8_t net_pool_used_count() {
 }
 
 static int net_seen_rssi() {
-    int r = net_seen_ssid_rssi(g_net_ssid);
-    if (r != 0) return r;
+    int best_tier = -1;
+    int best_r = 0;
     for (int i = 0; i < FLUG_WIFI_POOL_SLOTS; i++) {
-        if (g_wifi_pool[i].used) {
-            r = net_seen_ssid_rssi(g_wifi_pool[i].ssid);
-            if (r != 0) return r;
+        if (!g_wifi_pool[i].used) continue;
+        int r = net_seen_ssid_rssi(g_wifi_pool[i].ssid);
+        if (r != 0 && ((int)g_wifi_pool[i].hotspot_tier > best_tier ||
+                       ((int)g_wifi_pool[i].hotspot_tier == best_tier && r > best_r))) {
+            best_tier = (int)g_wifi_pool[i].hotspot_tier;
+            best_r = r;
         }
     }
+    if (best_r != 0) return best_r;
+    int r = net_seen_ssid_rssi(g_net_ssid);
+    if (r != 0) return r;
     const char* open_s = net_find_best_open_ssid();
     if (open_s) return net_seen_ssid_rssi(open_s);
     return 0;
@@ -307,9 +377,11 @@ static void net_emit_pool() {
         if (!g_wifi_pool[i].used) continue;
         int32_t vp = 0, vq = 1;
         rust_reduce_rational_pq((int32_t)g_wifi_pool[i].ttl_q8, 255, &vp, &vq);
-        Serial.printf("# WIFI_POOL|{\"node\":\"%s\",\"slot\":%d,\"ssid\":\"%s\",\"open\":%d,\"portal\":%u,"
-                      "\"ttl_q8\":%u,\"salience_pq\":\"%ld/%ld\",\"ok_cnt\":%u,\"fails\":%u,\"rssi\":%d}\n",
+        Serial.printf("# WIFI_POOL|{\"node\":\"%s\",\"slot\":%d,\"ssid\":\"%s\",\"profile\":\"%s\",\"tier\":%u,"
+                      "\"open\":%d,\"portal\":%u,\"ttl_q8\":%u,\"salience_pq\":\"%ld/%ld\",\"ok_cnt\":%u,\"fails\":%u,\"rssi\":%d}\n",
                       g_medusa_node, i, g_wifi_pool[i].ssid,
+                      net_hotspot_tier_name(g_wifi_pool[i].hotspot_tier),
+                      (unsigned)g_wifi_pool[i].hotspot_tier,
                       g_wifi_pool[i].pass[0] ? 0 : 1,
                       (unsigned)g_wifi_pool[i].is_portal,
                       (unsigned)g_wifi_pool[i].ttl_q8,
@@ -321,13 +393,16 @@ static void net_emit_pool() {
 }
 
 static void net_emit_status(const char* note) {
-    char buf[340];
+    char buf[400];
     snprintf(buf, sizeof(buf),
-             "# WIFI|{\"node\":\"%s\",\"configured\":%d,\"ssid\":\"%s\",\"last\":%d,\"ip\":\"%s\",\"seen_rssi\":%d,"
+             "# WIFI|{\"node\":\"%s\",\"configured\":%d,\"ssid\":\"%s\",\"profile\":\"%s\",\"tier\":%u,"
+             "\"last\":%d,\"ip\":\"%s\",\"join_ms\":%lu,\"keepalive\":%d,\"seen_rssi\":%d,"
              "\"pool_active\":%u,\"learned\":%lu,\"forgotten\":%lu,"
              "\"mesh_ch\":%d,\"clock_ok\":%d,\"hour\":%u,\"ble\":%d,\"portal\":\"%s\",\"portal_accepts\":%lu,"
              "\"ota\":\"%s\",\"version\":\"" FLUGOS_VERSION_STR "\",\"note\":\"%s\"}\n",
-             g_medusa_node, g_net_ssid[0] ? 1 : 0, g_net_ssid, g_net_last_ok, g_net_last_ip,
+             g_medusa_node, g_net_ssid[0] ? 1 : 0, g_net_ssid,
+             net_hotspot_tier_name(g_hotspot_active_tier), (unsigned)g_hotspot_active_tier,
+             g_net_last_ok, g_net_last_ip, (unsigned long)g_hotspot_join_ms, g_hotspot_keepalive ? 1 : 0,
              net_seen_rssi(), (unsigned)net_pool_used_count(),
              (unsigned long)g_wifi_learned_cnt, (unsigned long)g_wifi_forgotten_cnt,
              (int)g_s3_sun_ch, g_lrn_clock_ok ? 1 : 0, (unsigned)g_lrn_hour,
@@ -545,19 +620,63 @@ static bool net_captive_portal_auto_accept() {
     return (verify_code == 204 || (submit_code >= 200 && submit_code < 400));
 }
 
-static bool net_try_join_one(const char* ssid, const char* pass, unsigned long wait_ms) {
+static bool net_try_join_one(const char* ssid, const char* pass, unsigned long wait_ms, uint8_t tier_hint = 0) {
     if (!ssid || !ssid[0]) return false;
+    unsigned long join_t0 = millis();
     esp_wifi_set_promiscuous(false);
-    WiFi.begin(ssid, (pass && pass[0]) ? pass : NULL);
-    unsigned long t0 = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - t0 < wait_ms) {
-        vTaskDelay(pdMS_TO_TICKS(50));
+    // Disable Wi-Fi modem sleep & force 20MHz HT20 for rock-solid WPA2/WPA3-SAE + DHCP handshake
+    // against Samsung Galaxy S25 Ultra (Android 16) and GL.iNet (GL-MT3000/GL-A1300/GlobalWiFi) hotspots
+    WiFi.setSleep(false);
+    esp_wifi_set_ps(WIFI_PS_NONE);
+    esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW_HT20);
+    WiFi.setAutoReconnect(true);
+
+    const char* pw = (pass && pass[0]) ? pass : NULL;
+    uint8_t seen_ch = 0;
+    uint8_t seen_bssid[6] = {0};
+    int seen_r = net_find_seen_ap(ssid, &seen_ch, seen_bssid);
+
+    // Stage 1: Direct Channel + BSSID fast-lock when passive 802.11 sniffer has already seen the AP
+    if (seen_r != 0 && seen_ch >= 1 && seen_ch <= 13) {
+        unsigned long fast_wait = (wait_ms > 2200UL) ? 2200UL : wait_ms;
+        WiFi.begin(ssid, pw, (int32_t)seen_ch, seen_bssid, true);
+        unsigned long t0 = millis();
+        while (WiFi.status() != WL_CONNECTED && millis() - t0 < fast_wait) {
+            vTaskDelay(pdMS_TO_TICKS(25));
+        }
     }
+
+    // Stage 2: Full-spectrum fallback (handles hotspot channel jump or waking mobile tethering)
+    if (WiFi.status() != WL_CONNECTED) {
+        WiFi.disconnect(false);
+        vTaskDelay(pdMS_TO_TICKS(20));
+        WiFi.begin(ssid, pw);
+        unsigned long t0 = millis();
+        while (WiFi.status() != WL_CONNECTED && millis() - t0 < wait_ms) {
+            vTaskDelay(pdMS_TO_TICKS(30));
+        }
+    }
+
     if (WiFi.status() == WL_CONNECTED) {
+        g_hotspot_join_ms = (uint32_t)(millis() - join_t0);
         strncpy(g_net_ssid, ssid, sizeof(g_net_ssid) - 1);
+        g_net_ssid[sizeof(g_net_ssid) - 1] = '\0';
         strncpy(g_net_pass, pass ? pass : "", sizeof(g_net_pass) - 1);
+        g_net_pass[sizeof(g_net_pass) - 1] = '\0';
         int ch = (int)WiFi.channel();
-        if (ch >= 1 && ch <= 13) g_s3_sun_ch = ch;
+        if (ch >= 1 && ch <= 13) {
+            g_s3_sun_ch = ch;
+            g_hotspot_last_ch = (uint8_t)ch;
+        }
+        uint8_t gw0 = WiFi.gatewayIP()[0];
+        uint8_t gw1 = WiFi.gatewayIP()[1];
+        uint8_t gw2 = WiFi.gatewayIP()[2];
+        uint8_t det_tier = net_classify_hotspot_tier(ssid, pass, tier_hint);
+        if (det_tier < 2) {
+            if (gw0 == 192 && gw1 == 168 && gw2 == 8) det_tier = 2; // GL.iNet default 192.168.8.1
+            else if (gw0 == 192 && gw1 == 168 && (gw2 == 43 || gw2 == 189 || gw2 == 212)) det_tier = 3; // Galaxy/Android hotspot
+        }
+        g_hotspot_active_tier = det_tier;
         return true;
     }
     WiFi.disconnect(false);
@@ -565,51 +684,87 @@ static bool net_try_join_one(const char* ssid, const char* pass, unsigned long w
 }
 
 static bool net_connect_best(bool allow_blind = false) {
+    // If already connected to our active hotspot and IP is valid, reuse immediately
+    if (WiFi.status() == WL_CONNECTED && WiFi.localIP()[0] != 0) {
+        int ch = (int)WiFi.channel();
+        if (ch >= 1 && ch <= 13) g_s3_sun_ch = ch;
+        return true;
+    }
+
     // 0. Run Anicca decay & opportunistic open-network learning from passive 802.11 beacons
     net_decay_and_forget_pool();
 
-    // 1. Try learned networks in g_wifi_pool that are currently visible in the RF spectrum
+    // 1. Rank visible networks in g_wifi_pool by (hotspot_tier DESC, seen_rssi DESC, ttl_q8 DESC)
+    // so Samsung Galaxy S25 Ultra (tier 3) and GL.iNet Router (tier 2) always connect first!
+    int order[FLUG_WIFI_POOL_SLOTS];
+    int count = 0;
     for (int i = 0; i < FLUG_WIFI_POOL_SLOTS; i++) {
         if (!g_wifi_pool[i].used) continue;
-        int seen_r = net_seen_ssid_rssi(g_wifi_pool[i].ssid);
-        if (seen_r != 0) {
-            if (net_try_join_one(g_wifi_pool[i].ssid, g_wifi_pool[i].pass, 3500UL)) {
-                return true;
-            } else {
-                // Join failed -> penalize TTL & fail_streak, and forget if expired!
-                g_wifi_pool[i].fail_streak++;
-                if (g_wifi_pool[i].fail_streak >= 3 || g_wifi_pool[i].ttl_q8 <= 80) {
-                    net_forget_slot(i, "join_failed_3x");
-                } else {
-                    g_wifi_pool[i].ttl_q8 -= 80;
-                }
+        if (net_seen_ssid_rssi(g_wifi_pool[i].ssid) != 0) {
+            order[count++] = i;
+        }
+    }
+    for (int a = 0; a < count; a++) {
+        for (int b = a + 1; b < count; b++) {
+            int ia = order[a], ib = order[b];
+            int ra = net_seen_ssid_rssi(g_wifi_pool[ia].ssid);
+            int rb = net_seen_ssid_rssi(g_wifi_pool[ib].ssid);
+            bool swap_it = false;
+            if (g_wifi_pool[ib].hotspot_tier > g_wifi_pool[ia].hotspot_tier) swap_it = true;
+            else if (g_wifi_pool[ib].hotspot_tier == g_wifi_pool[ia].hotspot_tier && rb > ra) swap_it = true;
+            if (swap_it) {
+                order[a] = ib;
+                order[b] = ia;
+            }
+        }
+    }
+
+    for (int k = 0; k < count; k++) {
+        int i = order[k];
+        uint8_t tier = g_wifi_pool[i].hotspot_tier;
+        unsigned long timeout_ms = (tier >= 2) ? 4500UL : 3500UL;
+        if (net_try_join_one(g_wifi_pool[i].ssid, g_wifi_pool[i].pass, timeout_ms, tier)) {
+            g_wifi_pool[i].hotspot_tier = g_hotspot_active_tier;
+            return true;
+        } else {
+            g_wifi_pool[i].fail_streak++;
+            if (tier == 0 && (g_wifi_pool[i].fail_streak >= 3 || g_wifi_pool[i].ttl_q8 <= 80)) {
+                net_forget_slot(i, "join_failed_3x");
+            } else if (tier == 0) {
+                g_wifi_pool[i].ttl_q8 -= 80;
             }
         }
     }
 
     // 2. Try primary NVS-remembered SSID if visible
     if (g_net_ssid[0] && net_seen_ssid_rssi(g_net_ssid) != 0) {
-        if (net_try_join_one(g_net_ssid, g_net_pass, 3500UL)) return true;
+        uint8_t tier = net_classify_hotspot_tier(g_net_ssid, g_net_pass, 1);
+        if (net_try_join_one(g_net_ssid, g_net_pass, (tier >= 2) ? 4500UL : 3500UL, tier)) return true;
     }
 
     // 3. Opportunistically join the strongest OPEN 2.4GHz network heard right now
     const char* open_ssid = net_find_best_open_ssid();
     if (open_ssid && open_ssid[0]) {
-        if (net_try_join_one(open_ssid, "", 3500UL)) {
-            net_learn_wifi(open_ssid, "", (int8_t)WiFi.RSSI(), false, true);
+        if (net_try_join_one(open_ssid, "", 3500UL, 0)) {
+            net_learn_wifi(open_ssid, "", (int8_t)WiFi.RSSI(), false, true, 0);
             return true;
         }
     }
 
     if (!allow_blind) return false;
 
-    // 4. Explicit manual sync: try learned pool entries even if passive beacon hasn't swept their channel yet
+    // 4. Explicit manual/blind sync: try Galaxy Ultra & GL hotspots first, then remaining pool entries
     if (g_net_ssid[0]) {
-        if (net_try_join_one(g_net_ssid, g_net_pass, 4000UL)) return true;
+        uint8_t tier = net_classify_hotspot_tier(g_net_ssid, g_net_pass, 1);
+        if (net_try_join_one(g_net_ssid, g_net_pass, 4500UL, tier)) return true;
     }
-    for (int i = 0; i < FLUG_WIFI_POOL_SLOTS; i++) {
-        if (g_wifi_pool[i].used) {
-            if (net_try_join_one(g_wifi_pool[i].ssid, g_wifi_pool[i].pass, 3500UL)) return true;
+    for (int tier_pass = 3; tier_pass >= 0; tier_pass--) {
+        for (int i = 0; i < FLUG_WIFI_POOL_SLOTS; i++) {
+            if (g_wifi_pool[i].used && (int)g_wifi_pool[i].hotspot_tier == tier_pass) {
+                if (net_try_join_one(g_wifi_pool[i].ssid, g_wifi_pool[i].pass, (tier_pass >= 2) ? 4500UL : 3500UL, (uint8_t)tier_pass)) {
+                    return true;
+                }
+            }
         }
     }
     return false;
@@ -900,7 +1055,7 @@ static void net_sync_impl(bool allow_blind = false) {
     g_net_last_try = millis();
     g_net_ever = true;
 
-    if (!allow_blind && net_seen_rssi() == 0) {
+    if (!allow_blind && WiFi.status() != WL_CONNECTED && net_seen_rssi() == 0) {
         g_net_last_ok = 0;
         g_net_last_ip[0] = '\0';
         net_record_offline_log("no_known_or_open_ap");
@@ -911,10 +1066,18 @@ static void net_sync_impl(bool allow_blind = false) {
     if (net_connect_best(allow_blind)) {
         g_net_fail_streak = 0;
         strncpy(g_net_last_ip, WiFi.localIP().toString().c_str(), sizeof(g_net_last_ip) - 1);
-        // 1. Automatically detect and accept simple "Accept Button" Captive Portals!
-        bool portal_ok = net_captive_portal_auto_accept();
+        g_net_last_ip[sizeof(g_net_last_ip) - 1] = '\0';
+
+        // 1. For password-protected Galaxy S25 Ultra / GL.iNet hotspots, skip slow HTML scraping if generate_204 succeeds
+        bool portal_ok = true;
+        if (g_hotspot_active_tier >= 2 && g_net_pass[0] != '\0') {
+            strncpy(g_portal_status, "hotspot_direct", sizeof(g_portal_status) - 1);
+        } else {
+            portal_ok = net_captive_portal_auto_accept();
+        }
+
         // 2. Reinforce learned Wi-Fi entry & share verified network with sibling nodes over ESP-NOW TWIF!
-        net_learn_wifi(g_net_ssid, g_net_pass, (int8_t)WiFi.RSSI(), portal_ok, g_net_pass[0] == '\0');
+        net_learn_wifi(g_net_ssid, g_net_pass, (int8_t)WiFi.RSSI(), portal_ok, g_net_pass[0] == '\0', g_hotspot_active_tier);
         if (portal_ok) {
             net_share_wifi_espnow_impl(false);
         }
@@ -926,20 +1089,32 @@ static void net_sync_impl(bool allow_blind = false) {
         configTime(0, 0, "pool.ntp.org", "time.google.com", "time.cloudflare.com");
         time_t now = 0;
         unsigned long t1 = millis();
-        while ((now = time(nullptr)) < 1700000000 && millis() - t1 < 2500UL) {
-            vTaskDelay(pdMS_TO_TICKS(60));
+        while ((now = time(nullptr)) < 1700000000 && millis() - t1 < 2200UL) {
+            vTaskDelay(pdMS_TO_TICKS(50));
         }
         if (now >= 1700000000) {
             learn_clock_set((long long)now);
             g_net_last_ok = 1;
-            net_emit_status("ntp + portal ok");
+            net_emit_status((g_hotspot_active_tier >= 2) ? "hotspot + ntp ok" : "ntp + portal ok");
         } else {
             g_net_last_ok = 1;
-            net_emit_status("connected + portal checked");
+            net_emit_status((g_hotspot_active_tier >= 2) ? "hotspot connected" : "connected + portal checked");
         }
         // Automatic OTA version check while connected to Wi-Fi if host IP is known
         if (g_ota_auto && g_host_ip[0]) {
             net_ota_check_and_update(nullptr, false);
+        }
+
+        // Keep STA association alive on sovereign Galaxy S25 Ultra / GL.iNet hotspots when keepalive is enabled
+        if (g_hotspot_keepalive && g_hotspot_active_tier >= 2 && WiFi.status() == WL_CONNECTED) {
+            int ch = (int)WiFi.channel();
+            if (ch >= 1 && ch <= 13) {
+                g_s3_sun_ch = ch;
+                g_s3_channel = ch;
+            }
+            g_s3_hopping = false;
+            esp_wifi_set_promiscuous(true);
+            return;
         }
     } else {
         if (g_net_fail_streak < 250) g_net_fail_streak++;
@@ -967,9 +1142,10 @@ static void net_host_set(const char* a) {   // HOST <ip> <port> <token>
 }
 
 static void net_push_say_impl(const char* say, uint32_t seq) {
-    if (!g_net_ssid[0] || !g_host_ip[0] || !g_host_port || net_seen_rssi() == 0) return;
+    if (!g_net_ssid[0] || !g_host_ip[0] || !g_host_port || (WiFi.status() != WL_CONNECTED && net_seen_rssi() == 0)) return;
+    bool was_connected = (WiFi.status() == WL_CONNECTED);
     int code = -1;
-    if (net_connect_best(false)) {
+    if (was_connected || net_connect_best(false)) {
         HTTPClient h;
         String url = String("http://") + g_host_ip + ":" + String(g_host_port) + "/board/say";
         if (h.begin(url)) {
@@ -981,7 +1157,9 @@ static void net_push_say_impl(const char* say, uint32_t seq) {
             h.end();
         }
     }
-    WiFi.disconnect(false);
+    if (!was_connected && !(g_hotspot_keepalive && g_hotspot_active_tier >= 2)) {
+        WiFi.disconnect(false);
+    }
     esp_wifi_set_promiscuous(true);
     esp_wifi_set_channel((int)g_s3_sun_ch, WIFI_SECOND_CHAN_NONE);
     g_s3_channel = (int)g_s3_sun_ch;
@@ -1140,6 +1318,51 @@ static void net_ble_start() {
                   g_medusa_node, dev_name);
 }
 
+// `HOTSPOT`, `HOTSPOT STATUS`, `HOTSPOT GALAXY <ssid> [pass]`, `HOTSPOT GL <ssid> [pass]`, `HOTSPOT KEEP <0|1>`
+static void net_hotspot_command(const char* a) {
+    while (*a == ' ') a++;
+    if (!*a || strcasecmp(a, "STATUS") == 0) {
+        net_emit_status("hotspot_status");
+        net_emit_pool();
+        return;
+    }
+    if (strncasecmp(a, "KEEP ", 5) == 0) {
+        const char* v = a + 5;
+        while (*v == ' ') v++;
+        g_hotspot_keepalive = (*v != '0' && strcasecmp(v, "OFF") != 0 && strcasecmp(v, "FALSE") != 0);
+        net_emit_status(g_hotspot_keepalive ? "hotspot_keepalive_on" : "hotspot_keepalive_off");
+        return;
+    }
+    uint8_t explicit_tier = 1;
+    if (strncasecmp(a, "GALAXY ", 7) == 0) {
+        explicit_tier = 3;
+        a += 7;
+    } else if (strncasecmp(a, "GL ", 3) == 0) {
+        explicit_tier = 2;
+        a += 3;
+    }
+    while (*a == ' ') a++;
+    if (!*a) {
+        net_emit_status("hotspot_status");
+        return;
+    }
+    const char* sp = strchr(a, ' ');
+    size_t n = sp ? (size_t)(sp - a) : strlen(a);
+    if (n >= sizeof(g_net_ssid)) n = sizeof(g_net_ssid) - 1;
+    memcpy(g_net_ssid, a, n);
+    g_net_ssid[n] = '\0';
+    g_net_pass[0] = '\0';
+    if (sp) {
+        while (*sp == ' ') sp++;
+        strncpy(g_net_pass, sp, sizeof(g_net_pass) - 1);
+        g_net_pass[sizeof(g_net_pass) - 1] = '\0';
+    }
+    g_hotspot_active_tier = net_classify_hotspot_tier(g_net_ssid, g_net_pass, explicit_tier);
+    net_learn_wifi(g_net_ssid, g_net_pass, -48, true, g_net_pass[0] == '\0', explicit_tier);
+    net_share_wifi_espnow(false);
+    net_sync(true);
+}
+
 // `WIFI`, `WIFI POOL`, `WIFI FORGET [ssid]`, `WIFI SYNC`, `WIFI PORTAL`, `WIFI SHARE`, `WIFI <ssid> [password]`
 static void net_command(const char* a) {
     while (*a == ' ') a++;
@@ -1156,6 +1379,10 @@ static void net_command(const char* a) {
         net_emit_status("forgotten_ssid");
         return;
     }
+    if (strncasecmp(a, "HOTSPOT", 7) == 0) {
+        net_hotspot_command(a + 7);
+        return;
+    }
     if (strncasecmp(a, "LEARN ", 6) == 0) {
         a += 6;
         while (*a == ' ') a++;
@@ -1167,7 +1394,9 @@ static void net_command(const char* a) {
     g_net_ssid[n] = '\0';
     g_net_pass[0] = '\0';
     if (sp) { while (*sp == ' ') sp++; strncpy(g_net_pass, sp, sizeof(g_net_pass) - 1); g_net_pass[sizeof(g_net_pass) - 1] = '\0'; }
-    net_learn_wifi(g_net_ssid, g_net_pass, -50, true, g_net_pass[0] == '\0');
+    uint8_t tier = net_classify_hotspot_tier(g_net_ssid, g_net_pass, 1);
+    g_hotspot_active_tier = tier;
+    net_learn_wifi(g_net_ssid, g_net_pass, -50, true, g_net_pass[0] == '\0', tier);
     // Automatically share the newly learned Wi-Fi credentials with the other Triad boards over ESP-NOW!
     net_share_wifi_espnow(false);
     net_sync(true);
@@ -1187,13 +1416,33 @@ static void net_tick(unsigned long now) {
             net_queue_ota(nullptr, true);
         }
     }
-    if (now < 6000UL) return;
+    if (now < 4500UL) return;
     if (!g_net_ever) {
         net_sync();
         return;
     }
-    // Retry every 180s (if fail_streak < 2) when passive scan hears a known hotspot, else re-sync every 6h
-    if (g_net_last_ok != 1 && g_net_fail_streak < 2 && net_seen_rssi() != 0 && (now - g_net_last_try > 180000UL)) {
+
+    // While connected in hotspot keepalive mode, service UDP 8888 MEMNET packets continuously
+    if (WiFi.status() == WL_CONNECTED) {
+        net_memnet_udp_exchange_while_connected();
+        if (now - g_net_last_try > 6UL * 3600UL * 1000UL) {
+            net_sync();
+        }
+        return;
+    }
+
+    // Fast-trigger join as soon as passive 802.11 sniffer hears a known Galaxy Ultra / GL router / pool hotspot
+    int seen_r = net_seen_rssi();
+    bool currently_seen = (seen_r != 0);
+    if (currently_seen && !g_net_prev_seen_hotspot && (now - g_net_last_try > 4000UL)) {
+        g_net_prev_seen_hotspot = true;
+        net_sync();
+        return;
+    }
+    g_net_prev_seen_hotspot = currently_seen;
+
+    // Periodic retry: every 25s when a known hotspot is visible in RF spectrum, or every 6h otherwise
+    if (currently_seen && g_net_last_ok != 1 && (now - g_net_last_try > 25000UL)) {
         net_sync();
     } else if (now - g_net_last_try > 6UL * 3600UL * 1000UL) {
         net_sync();

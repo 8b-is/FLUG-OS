@@ -36,11 +36,24 @@
 #define AMOLED_BAND_H       28     // Even band height (448 = 16*28; 502 = 17*28 + 26)
 #define QSPI_CHUNK_PIXELS   (AMOLED_MAX_W * AMOLED_BAND_H) // Full 28-row band in 1 QSPI DMA transfer (16-18/frame)
 
-// Runtime-detected display geometry (defaults to 1.8" 368x448, updated at boot)
-static bool     g_board_is_18 = true;
-static uint16_t g_lcd_w       = 368;
-static uint16_t g_lcd_h       = 448;
-static uint16_t g_lcd_x_gap   = 0;
+// Runtime-detected display geometry (defaults to 1.8" 368x448, dynamically updated at boot/flash)
+#if defined(FLUGOS_LCD_W) && ((FLUGOS_LCD_W < 240) || (FLUGOS_LCD_W > AMOLED_MAX_W))
+#error "FLUGOS_LCD_W must be between 240 and AMOLED_MAX_W (410)"
+#endif
+#if defined(FLUGOS_LCD_H) && ((FLUGOS_LCD_H < 200) || (FLUGOS_LCD_H > AMOLED_MAX_H))
+#error "FLUGOS_LCD_H must be between 200 and AMOLED_MAX_H (502)"
+#endif
+
+static bool        g_board_is_18      = true;
+static bool        g_s3_is_tdeck      = false;
+static uint16_t    g_lcd_w            = 368;
+static uint16_t    g_lcd_h            = 448;
+static uint16_t    g_hw_lcd_w         = 368;
+static uint16_t    g_hw_lcd_h         = 448;
+static uint16_t    g_lcd_x_gap        = 0;
+static uint16_t    g_lcd_y_gap        = 0;
+static const char* g_lcd_det_src      = "boot_default";
+static const char* g_board_model_name = "ESP32-S3-Touch-AMOLED-1.8";
 
 #define PIN_LCD_CS          12
 #define PIN_LCD_PCLK        11
@@ -150,22 +163,86 @@ static uint8_t s3_i2c_read8(uint8_t addr, uint8_t reg, uint8_t fallback = 0) {
 static const char* g_lcd_driver_name = "SH8601";
 static bool        g_es7210_ok       = false;
 
-static bool s3_tca9554_init_and_reset() {
+static bool s3_detect_and_reset_display(const uint8_t* mac_hint = NULL) {
+    bool force_18    = false;
+    bool force_206   = false;
+    bool force_tdeck = false;
 #if defined(FLUGOS_BOARD_18)
-    bool force_18 = true;
-#else
-    bool force_18 = false;
+    force_18 = true;
+#elif defined(FLUGOS_BOARD_206)
+    force_206 = true;
+#elif defined(FLUGOS_BOARD_TDECK)
+    force_tdeck = true;
 #endif
+
+    // Probe I2C topology with stabilization retry so slow 3.3V ALDO rail ramp never mis-detects 1.8" vs 2.06"
     bool has_es7210  = s3_i2c_probe(I2C_ADDR_ES7210);
     bool has_tca9554 = s3_i2c_probe(I2C_ADDR_TCA9554);
+    if (!has_es7210 && !has_tca9554) {
+        delay(40);
+        has_es7210  = s3_i2c_probe(I2C_ADDR_ES7210);
+        has_tca9554 = s3_i2c_probe(I2C_ADDR_TCA9554);
+    }
 
-    // 1.8" ("little one") has TCA9554 @ 0x20 and no ES7210 @ 0x40; 2.06" has ES7210 @ 0x40 and no TCA9554 @ 0x20
-    if (!force_18 && (has_es7210 || !has_tca9554)) {
-        g_board_is_18     = false;
-        g_lcd_w           = 410;
-        g_lcd_h           = 502;
-        g_lcd_x_gap       = 22; // 0x16 column offset for 410x502 CO5300 panel
-        g_lcd_driver_name = "CO5300";
+    // Check factory eFuse MAC hint if provided (0xC4 = ADA 1.8", 0xB0/0xB4 = VAK/OMN 2.06", 0x24 = T-Deck 320x240)
+    bool mac_is_18    = (mac_hint && mac_hint[0] == 0x80 && mac_hint[5] == 0xC4);
+    bool mac_is_206   = (mac_hint && mac_hint[0] == 0x80 && (mac_hint[5] == 0xB0 || mac_hint[5] == 0xB4));
+    bool mac_is_tdeck = (mac_hint && mac_hint[0] == 0xCC && mac_hint[5] == 0x24);
+
+    if (force_tdeck || (!force_18 && !force_206 && mac_is_tdeck)) {
+        g_board_is_18      = false;
+        g_s3_is_tdeck      = true;
+        g_lcd_w            = 320;
+        g_lcd_h            = 240;
+        g_hw_lcd_w         = 320;
+        g_hw_lcd_h         = 240;
+        g_lcd_x_gap        = 0;
+        g_lcd_y_gap        = 0;
+        g_lcd_driver_name  = "ST7789";
+        g_board_model_name = "LilyGO-T-Deck-Plus-2.8";
+        g_lcd_det_src      = force_tdeck ? "flash_flag_tdeck" : "efuse_mac_tdeck";
+        return false;
+    }
+
+    g_s3_is_tdeck = false;
+    bool select_206 = false;
+    if (force_206) {
+        select_206    = true;
+        g_lcd_det_src = "flash_flag_206";
+    } else if (force_18) {
+        select_206    = false;
+        g_lcd_det_src = "flash_flag_18";
+    } else if (mac_is_206) {
+        select_206    = true;
+        g_lcd_det_src = has_es7210 ? "efuse_mac+i2c_es7210" : "efuse_mac_206";
+    } else if (mac_is_18) {
+        select_206    = false;
+        g_lcd_det_src = has_tca9554 ? "efuse_mac+i2c_tca9554" : "efuse_mac_18";
+    } else if (has_es7210 || !has_tca9554) {
+        select_206    = true;
+        g_lcd_det_src = has_es7210 ? "i2c_es7210_0x40" : "i2c_no_tca9554";
+    } else {
+        select_206    = false;
+        g_lcd_det_src = "i2c_tca9554_0x20";
+    }
+
+    if (select_206) {
+        g_board_is_18      = false;
+        g_hw_lcd_w         = 410;
+        g_hw_lcd_h         = 502;
+        g_lcd_w            = 410;
+        g_lcd_h            = 502;
+        g_lcd_x_gap        = 22; // 0x16 column offset for 410x502 CO5300 panel
+        g_lcd_y_gap        = 0;
+        g_lcd_driver_name  = "CO5300";
+        g_board_model_name = "ESP32-S3-Touch-AMOLED-2.06";
+#if defined(FLUGOS_LCD_W) && defined(FLUGOS_LCD_H)
+        if (FLUGOS_LCD_W <= 410 && FLUGOS_LCD_H <= 502) {
+            g_lcd_w       = (uint16_t)FLUGOS_LCD_W;
+            g_lcd_h       = (uint16_t)FLUGOS_LCD_H;
+            g_lcd_det_src = "flash_flag_wh";
+        }
+#endif
         // Waveshare 2.06" dedicated LCD_RST (GPIO 8) and TP_RST (GPIO 9) reset sequence (baye-rust tca9554.rs)
         gpio_set_direction((gpio_num_t)PIN_LCD_RST_206, GPIO_MODE_OUTPUT);
         gpio_set_direction((gpio_num_t)PIN_TP_RST_206, GPIO_MODE_OUTPUT);
@@ -177,11 +254,23 @@ static bool s3_tca9554_init_and_reset() {
         delay(150);
         return false;
     }
-    g_board_is_18     = true;
-    g_lcd_w           = 368;
-    g_lcd_h           = 448;
-    g_lcd_x_gap       = 0;
-    g_lcd_driver_name = "SH8601";
+
+    g_board_is_18      = true;
+    g_hw_lcd_w         = 368;
+    g_hw_lcd_h         = 448;
+    g_lcd_w            = 368;
+    g_lcd_h            = 448;
+    g_lcd_x_gap        = 0;
+    g_lcd_y_gap        = 0;
+    g_lcd_driver_name  = "SH8601";
+    g_board_model_name = "ESP32-S3-Touch-AMOLED-1.8";
+#if defined(FLUGOS_LCD_W) && defined(FLUGOS_LCD_H)
+    if (FLUGOS_LCD_W <= 368 && FLUGOS_LCD_H <= 448) {
+        g_lcd_w       = (uint16_t)FLUGOS_LCD_W;
+        g_lcd_h       = (uint16_t)FLUGOS_LCD_H;
+        g_lcd_det_src = "flash_flag_wh";
+    }
+#endif
     // Set pins 0..2 as outputs (0 = output, 1 = input -> 0xF8 = 0b11111000)
     if (!s3_i2c_write8(I2C_ADDR_TCA9554, 0x03, 0xF8)) return false;
     // Assert reset (drive pins 0..2 LOW)
@@ -191,6 +280,10 @@ static bool s3_tca9554_init_and_reset() {
     s3_i2c_write8(I2C_ADDR_TCA9554, 0x01, 0x07);
     delay(50);
     return true;
+}
+
+static inline bool s3_tca9554_init_and_reset() {
+    return s3_detect_and_reset_display(NULL);
 }
 
 // ============================================================
@@ -845,6 +938,15 @@ static void s3_amoled_periodic_refresh(uint8_t target_brightness) {
 }
 
 static bool s3_amoled_init() {
+    if (g_s3_is_tdeck) {
+        size_t band_bytes = (size_t)AMOLED_MAX_W * (size_t)AMOLED_BAND_H * sizeof(uint16_t);
+        s_band_buf = (uint16_t*)heap_caps_aligned_alloc(16, band_bytes, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+        if (!s_band_buf) {
+            s_band_buf = (uint16_t*)heap_caps_malloc(band_bytes, MALLOC_CAP_DMA);
+        }
+        return (s_band_buf != NULL);
+    }
+
     // Configure CS as manual GPIO output (matches baye-rust sh8601.rs)
     gpio_set_direction((gpio_num_t)PIN_LCD_CS, GPIO_MODE_OUTPUT);
     sh8601_cs_high();
@@ -1247,28 +1349,51 @@ struct S3Canvas {
         }
     }
 
-    inline void draw_text(int x, int y, const char* str, uint16_t color, int scale = 1) {
-        if (!str || y + 7 * scale <= y0 || y >= y1) return;
+    inline void draw_text_clipped(int x, int y, int max_w, const char* str, uint16_t color, int scale = 1) {
+        if (!str || max_w <= 0 || y + 7 * scale <= y0 || y >= y1) return;
         int cx = x;
         int adv = 6 * scale;
+        int limit_x = x + max_w;
+        if (limit_x > (int)g_lcd_w - 4) limit_x = (int)g_lcd_w - 4;
         while (*str) {
+            if (cx + 5 * scale > limit_x) break;
             draw_char(cx, y, *str++, color, scale);
             cx += adv;
         }
     }
 
+    inline void draw_text_fit(int x, int y, int max_w, const char* str, uint16_t color, int pref_scale = 2) {
+        if (!str || max_w <= 0) return;
+        int len = (int)strlen(str);
+        int scale = pref_scale;
+        if (scale > 1 && (len * 6 * scale - scale) > max_w) {
+            scale = 1;
+        }
+        draw_text_clipped(x, y, max_w, str, color, scale);
+    }
+
+    inline void draw_text(int x, int y, const char* str, uint16_t color, int scale = 1) {
+        draw_text_clipped(x, y, (int)g_lcd_w - x - 4, str, color, scale);
+    }
+
     inline void draw_text_centered(int cx, int y, const char* str, uint16_t color, int scale = 1) {
         if (!str) return;
         int len = (int)strlen(str);
+        int max_chars = ((int)g_lcd_w - 16) / (6 * scale);
+        if (len > max_chars && max_chars > 0) len = max_chars;
         int w = len * 6 * scale - scale;
-        draw_text(cx - w / 2, y, str, color, scale);
+        int start_x = cx - w / 2;
+        if (start_x < 4) start_x = 4;
+        draw_text_clipped(start_x, y, len * 6 * scale, str, color, scale);
     }
 
     inline void draw_text_right(int rx, int y, const char* str, uint16_t color, int scale = 1) {
         if (!str) return;
         int len = (int)strlen(str);
         int w = len * 6 * scale - scale;
-        draw_text(rx - w, y, str, color, scale);
+        int start_x = rx - w;
+        if (start_x < 4) start_x = 4;
+        draw_text_clipped(start_x, y, rx - start_x + 2, str, color, scale);
     }
 };
 
