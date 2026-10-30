@@ -805,8 +805,43 @@ static void sh8601_write_cmd_data32(uint8_t cmd, uint16_t d1, uint16_t d2) {
     sh8601_write_cmd_bytes(cmd, buf, 4);
 }
 
+static uint8_t  g_amoled_last_brightness = 0x58;
+static uint32_t g_amoled_refresh_count   = 0;
+static uint8_t  g_amoled_orbit_phase     = 0;
+
 static void s3_amoled_set_brightness(uint8_t level) {
+    g_amoled_last_brightness = level;
     sh8601_write_cmd_data(0x51, level);
+}
+
+// Periodic non-destructive OLED/AMOLED controller state refresh + subpixel orbit tick.
+// Re-asserts SLPOUT, NORON, INVOFF, RGB565 PIXFMT, QIO mode (CO5300 0xC4=0x80), DISPON,
+// and brightness every 30s without SWRESET flicker so RF bursts or USB-C power transients
+// never leave the panel blank or stuck in 1-line SPI mode.
+static void s3_amoled_periodic_refresh(uint8_t target_brightness) {
+    if (!s_amoled_spi) return;
+    sh8601_cs_high();
+    if (g_board_is_18) {
+        sh8601_write_cmd(0x11);            // SLPOUT
+        sh8601_write_cmd(0x13);            // NORON
+        sh8601_write_cmd(0x20);            // INVOFF
+        sh8601_write_cmd_data(0x3A, 0x05); // PIXFMT = RGB565 (SH8601)
+        sh8601_write_cmd(0x29);            // DISPON
+        sh8601_write_cmd_data(0x53, 0x28); // CTRL_DISPLAY
+        sh8601_write_cmd_data(0x58, 0x00); // CE off
+    } else {
+        sh8601_write_cmd_data(0x36, 0x00); // MADCTL
+        sh8601_write_cmd_data(0x3A, 0x55); // PIXFMT = RGB565 (CO5300)
+        sh8601_write_cmd(0x11);            // SLPOUT
+        sh8601_write_cmd_data(0xC4, 0x80); // CO5300 QIO pixel path enable
+        sh8601_write_cmd_data(0x35, 0x00); // TEON
+        sh8601_write_cmd_data(0x53, 0x20); // WRCTRLD
+        sh8601_write_cmd_data(0x63, 0xFF); // WRHBMD
+        sh8601_write_cmd(0x29);            // DISPON
+    }
+    s3_amoled_set_brightness(target_brightness);
+    g_amoled_orbit_phase = (uint8_t)((g_amoled_orbit_phase + 1u) & 0x03u);
+    g_amoled_refresh_count++;
 }
 
 static bool s3_amoled_init() {

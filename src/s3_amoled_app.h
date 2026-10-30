@@ -2760,6 +2760,12 @@ static void s3_handle_serial(const char* line) {
         g_s3_active_mode  = 11;
         g_s3_guardian_hud = false;
         s3_emit_medusa_json();
+    } else if (strcasecmp(line, "REFRESH") == 0 || strcasecmp(line, "OLED") == 0) {
+        s3_amoled_periodic_refresh(g_amoled_last_brightness);
+        s3_render_frame();
+        Serial.printf("# OLED_REFRESH|{\"node\":\"%s\",\"driver\":\"%s\",\"refresh_count\":%lu,\"brightness\":%u,\"orbit_phase\":%u}\n",
+                      g_medusa_node, g_lcd_driver_name, (unsigned long)g_amoled_refresh_count,
+                      (unsigned)g_amoled_last_brightness, (unsigned)g_amoled_orbit_phase);
     } else if (mem8_handle_serial(line)) {
         g_s3_active_mode  = 12;
         g_s3_guardian_hud = false;
@@ -2869,13 +2875,14 @@ static void s3_amoled_setup() {
 }
 
 static void s3_amoled_loop() {
-    static unsigned long last_frame_ms = 0;
-    static unsigned long last_imu_ms   = 0;
-    static unsigned long last_pmic_ms  = 0;
-    static unsigned long last_wave_ms  = 0;
-    static unsigned long last_riva_ms  = 0;
-    static bool          last_boot_btn = true;
-    static bool          bright_ramped = false;
+    static unsigned long last_frame_ms        = 0;
+    static unsigned long last_imu_ms          = 0;
+    static unsigned long last_pmic_ms         = 0;
+    static unsigned long last_wave_ms         = 0;
+    static unsigned long last_riva_ms         = 0;
+    static unsigned long last_oled_refresh_ms = 0;
+    static bool          last_boot_btn        = true;
+    static bool          bright_ramped        = false;
     static char          cmd_buf[160];
     static size_t        cmd_pos = 0;
 
@@ -2884,6 +2891,13 @@ static void s3_amoled_loop() {
     if (!bright_ramped && now > 1200) {
         bright_ramped = true;
         s3_amoled_set_brightness(0xD8);
+    }
+
+    // Periodic 30s OLED/AMOLED controller register refresh + anti-burn-in orbit tick
+    if (now - last_oled_refresh_ms >= 30000) {
+        last_oled_refresh_ms = now;
+        s3_amoled_periodic_refresh(g_amoled_last_brightness);
+        s3_render_frame();
     }
 
     bool boot_btn = digitalRead(PIN_BOOT_BTN);
