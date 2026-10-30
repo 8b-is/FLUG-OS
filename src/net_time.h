@@ -816,6 +816,86 @@ static void net_memnet_udp_exchange_while_connected() {
     }
 }
 
+#define FLUG_OFFLINE_LOG_SLOTS 8
+static char     g_offline_log_ring[FLUG_OFFLINE_LOG_SLOTS][96];
+static uint8_t  g_offline_log_head = 0;
+static uint8_t  g_offline_log_cnt  = 0;
+static uint32_t g_offline_log_total = 0;
+
+static void net_record_offline_log(const char* event_tag) {
+    uint8_t slot;
+    if (g_offline_log_cnt < FLUG_OFFLINE_LOG_SLOTS) {
+        slot = (uint8_t)((g_offline_log_head + g_offline_log_cnt) % FLUG_OFFLINE_LOG_SLOTS);
+        g_offline_log_cnt++;
+    } else {
+        slot = g_offline_log_head;
+        g_offline_log_head = (uint8_t)((g_offline_log_head + 1) % FLUG_OFFLINE_LOG_SLOTS);
+    }
+    g_offline_log_total++;
+    const char* best_open = net_find_best_open_ssid();
+    snprintf(g_offline_log_ring[slot], sizeof(g_offline_log_ring[slot]),
+             "t=%lus tag=%s aps=%u pool=%u open=%s fails=%u",
+             (unsigned long)(millis() / 1000UL),
+             event_tag ? event_tag : "offline",
+             (unsigned)g_medusa_ap_count,
+             (unsigned)net_pool_used_count(),
+             (best_open && best_open[0]) ? best_open : "none",
+             (unsigned)g_net_fail_streak);
+    Preferences p;
+    if (p.begin("wifi", false)) {
+        p.putUInt("off_tot", g_offline_log_total);
+        p.putUChar("off_cnt", g_offline_log_cnt);
+        p.putString("off_last", g_offline_log_ring[slot]);
+        p.end();
+    }
+    Serial.printf("# OFFLINE_LOG|{\"node\":\"%s\",\"queued\":%u,\"total\":%lu,\"entry\":\"%s\"}\n",
+                  g_medusa_node, (unsigned)g_offline_log_cnt,
+                  (unsigned long)g_offline_log_total, g_offline_log_ring[slot]);
+}
+
+static void net_upload_cheet_telemetry() {
+    if (WiFi.status() != WL_CONNECTED) return;
+    HTTPClient hc;
+    hc.setTimeout(3500);
+    if (!hc.begin("http://49.13.101.247:8795/api/wa-archive/ingest")) return;
+    hc.addHeader("Content-Type", "application/json");
+
+    char logs_summary[256] = "";
+    size_t pos = 0;
+    for (uint8_t i = 0; i < g_offline_log_cnt; i++) {
+        uint8_t idx = (uint8_t)((g_offline_log_head + i) % FLUG_OFFLINE_LOG_SLOTS);
+        int w = snprintf(logs_summary + pos, sizeof(logs_summary) - pos,
+                         "%s[%s]", (i == 0) ? "" : " ", g_offline_log_ring[idx]);
+        if (w <= 0 || (size_t)w >= sizeof(logs_summary) - pos) break;
+        pos += (size_t)w;
+    }
+
+    char payload[640];
+    snprintf(payload, sizeof(payload),
+             "{\"sender\":\"%s\",\"jid\":\"120363413133092554@g.us\",\"use_llm\":false,"
+             "\"text\":\"📡 *ESP32-S3 Watch Auto-Checkin (`%s`)* — SSID=`%s` (`%d dBm`, portal=`%s`) · "
+             "WiFiPool=`%u/%u` (learned=`%lu`, forgotten=`%lu`) · APs=`%u` · FlushedOfflineLogs=`%u` (total=`%lu`) %s\"}",
+             g_medusa_node, g_medusa_node, g_net_ssid, (int)WiFi.RSSI(), g_portal_status,
+             (unsigned)net_pool_used_count(), (unsigned)FLUG_WIFI_POOL_SLOTS,
+             (unsigned long)g_wifi_learned_cnt, (unsigned long)g_wifi_forgotten_cnt,
+             (unsigned)g_medusa_ap_count, (unsigned)g_offline_log_cnt,
+             (unsigned long)g_offline_log_total, logs_summary);
+
+    int code = hc.POST((uint8_t*)payload, strlen(payload));
+    hc.end();
+    if (code >= 200 && code < 300) {
+        g_offline_log_cnt = 0;
+        g_offline_log_head = 0;
+        Preferences p;
+        if (p.begin("wifi", false)) {
+            p.putUChar("off_cnt", 0);
+            p.end();
+        }
+    }
+    Serial.printf("# CHEET_UPLOAD|{\"node\":\"%s\",\"ssid\":\"%s\",\"http\":%d}\n",
+                  g_medusa_node, g_net_ssid, code);
+}
+
 static void net_sync_impl(bool allow_blind = false) {
     g_net_last_try = millis();
     g_net_ever = true;
@@ -823,6 +903,7 @@ static void net_sync_impl(bool allow_blind = false) {
     if (!allow_blind && net_seen_rssi() == 0) {
         g_net_last_ok = 0;
         g_net_last_ip[0] = '\0';
+        net_record_offline_log("no_known_or_open_ap");
         net_emit_status("offline mesh mode (fast)");
         return;
     }
@@ -839,7 +920,9 @@ static void net_sync_impl(bool allow_blind = false) {
         }
         // 3. Exchange MemnetCapsule64 waves over Wi-Fi UDP 8888 while on the LAN
         net_memnet_udp_exchange_while_connected();
-        // 3. Sync NTP clock
+        // 4. Upload health + flushed offline logs to cheet.is (49.13.101.247:8795)
+        net_upload_cheet_telemetry();
+        // 5. Sync NTP clock
         configTime(0, 0, "pool.ntp.org", "time.google.com", "time.cloudflare.com");
         time_t now = 0;
         unsigned long t1 = millis();
@@ -862,6 +945,7 @@ static void net_sync_impl(bool allow_blind = false) {
         if (g_net_fail_streak < 250) g_net_fail_streak++;
         g_net_last_ok = 0;
         g_net_last_ip[0] = '\0';
+        net_record_offline_log("join_timeout");
         net_emit_status("offline mesh mode");
     }
     WiFi.disconnect(false);
