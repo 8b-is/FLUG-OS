@@ -713,14 +713,17 @@ static void mem8_ecphoric_recall() {
     s3_espnow_broadcast(32, 32, 8600);
     const Mem8WorldWave* w = mem8_latest_wave();
     Serial.printf("# MEM8_RECALL|{\"node\":\"%s\",\"recalls\":%lu,\"memories\":%u,"
-                  "\"latest_seq\":%lu,\"wave_b3\":\"%s\",\"world\":\"%s\",\"seal_fnv64\":\"0x%016llx\"}\n",
+                  "\"latest_seq\":%lu,\"wave_b3\":\"%s\",\"world\":\"%s\",\"seal_fnv64\":\"0x%016llx\","
+                  "\"gate\":\"0x62\",\"qt\":\"0x55\",\"onecompression_fold\":\"0x%016llx\"}\n",
                   g_medusa_node,
                   (unsigned long)g_ms_ecphoric_recalls,
                   (unsigned)g_mem8_count,
                   (unsigned long)(w ? w->seq : 0),
                   w ? w->wave_b3 : "000000000",
                   w ? w->summary : "NONE",
-                  (unsigned long long)g_mem8_chain_fnv64);
+                  (unsigned long long)g_mem8_chain_fnv64,
+                  (unsigned long long)KOMPRESS_FOLD_ONECOMPRESSION);
+    hive_emit_ultrabackyard_video_frame("video_mp4_22s_4k_hdmi");
 }
 
 static void mem8_init() {
@@ -760,7 +763,9 @@ static bool mem8_handle_serial(const char* line) {
         (void)w;
         return true;
     }
-    if (strcasecmp(line, "MEM8 RECALL") == 0 || strcasecmp(line, "RECALL") == 0) {
+    if (strcasecmp(line, "MEM8 RECALL") == 0 || strcasecmp(line, "RECALL") == 0 ||
+        strcasecmp(line, "ULTRABACKYARDLOOP") == 0 || strcasecmp(line, "AGP") == 0 ||
+        strcasecmp(line, "ONESHOT") == 0 || strcasecmp(line, "AGP_ONESHOT") == 0) {
         mem8_ecphoric_recall();
         return true;
     }

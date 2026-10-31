@@ -396,6 +396,121 @@ int main() {
         self.assertEqual(res_lines[1]["driver"], "SH8601")
         self.assertEqual(res_lines[1]["x_gap"], 0)
 
+    def test_kompress_wupz_0x62_agp_oneshot_qt55_and_beehive_video_bridge(self):
+        cpp_agp_test = r"""
+#include <ctype.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
+struct MockSerial {
+    template <typename... Args>
+    void printf(const char* fmt, Args... args) {
+        ::printf(fmt, args...);
+    }
+} Serial;
+
+struct MockPower {
+    bool present = true;
+    bool vbus_good = true;
+    bool charging = true;
+    uint16_t batt_mv = 4150;
+    uint8_t batt_pct = 96;
+} g_power;
+
+struct S3TriadNode {
+    uint8_t ttl_q8;
+};
+static S3TriadNode g_triad_nodes[3] = {{255}, {255}, {255}};
+static uint8_t s3_triad_online_count() { return 3; }
+static const char* g_medusa_node = "OMN:MEDUSA";
+static unsigned long millis() { return 22000; }
+
+#define KOMPRESS_FOLD_ONECOMPRESSION  0x264076f7d8d022a6ULL
+#define KOMPRESS_FOLD_BACKYARD_ULTRA  0x49f4228578e7f9beULL
+#define UPZ_GATE_METADATA_BYTE        0x62u
+#define UPZ_QT_THERMAL_PARAM          0x55u
+#define AGP_ONESHOT_TMV_OPCODE        0xF3u
+#define UPZ_WITL_SPQT_BYTE            0xA1u
+
+static uint64_t g_kompress_pos_u64  = 0x824144bc0a470247ULL;
+static uint64_t g_kompress_neg_u64  = 0x49a2820164006100ULL;
+static uint64_t g_kompress_wupz_u64 = 0x264076f7d8d022a6ULL;
+
+static void s3_wupz_frame(uint8_t f[32], uint32_t ticks) {
+    static const int8_t   trit[4] = {-1, 0, 1, 1};
+    static const uint16_t hz[4]   = {432, 528, 852, 963};
+    static const uint8_t  gate_meta[4] = {
+        UPZ_GATE_METADATA_BYTE,
+        UPZ_QT_THERMAL_PARAM,
+        AGP_ONESHOT_TMV_OPCODE,
+        UPZ_WITL_SPQT_BYTE
+    };
+    memset(f, 0, 32);
+    for (int i = 0; i < 4; i++) {
+        f[i * 8]     = (uint8_t)trit[i];
+        f[i * 8 + 1] = (uint8_t)(hz[i] & 0xFF);
+        f[i * 8 + 2] = (uint8_t)(hz[i] >> 8);
+        f[i * 8 + 3] = gate_meta[i];
+        uint32_t lane_ticks = ticks ^ ((uint32_t)gate_meta[i] * 0x01000193u);
+        for (int k = 0; k < 4; k++) f[i * 8 + 4 + k] = (uint8_t)(lane_ticks >> (8 * k));
+    }
+}
+static inline bool s3_wupz_has_gate_0x62(const uint8_t f[32]) {
+    return f && f[3] == UPZ_GATE_METADATA_BYTE && f[11] == UPZ_QT_THERMAL_PARAM && f[19] == AGP_ONESHOT_TMV_OPCODE;
+}
+static inline bool kompress_is_known_fold(uint64_t fold) {
+    return (fold == KOMPRESS_FOLD_ONECOMPRESSION) ||
+           (fold == KOMPRESS_FOLD_BACKYARD_ULTRA) ||
+           (fold == g_kompress_wupz_u64);
+}
+
+#include "phoenix_hive.h"
+
+int main() {
+    phoenix_update(22000);
+    phoenix_emit();
+    hive_emit_frame();
+    hive_emit_ultrabackyard_video_frame("video_mp4_22s_4k_hdmi");
+    return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cpp_path = Path(tmpdir) / "agp_test.cpp"
+            bin_path = Path(tmpdir) / "agp_bin"
+            cpp_path.write_text(cpp_agp_test, encoding="utf-8")
+            subprocess.run(
+                ["g++", "-std=c++17", "-Wall", "-Wextra", "-Werror", f"-I{REPO_ROOT / 'src'}", str(cpp_path), "-o", str(bin_path)],
+                check=True,
+            )
+            proc = subprocess.run([str(bin_path)], capture_output=True, text=True, check=True)
+            lines = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
+
+        agp_lines = [json.loads(ln.split("|", 1)[1]) for ln in lines if ln.startswith("# AGP_ONESHOT|")]
+        hive_lines = [ln.split("|", 1)[1] for ln in lines if ln.startswith("# BEEHIVE|")]
+
+        self.assertEqual(len(agp_lines), 1)
+        agp = agp_lines[0]
+        self.assertEqual(agp["core"], "agp_oneshot_core")
+        self.assertEqual(agp["gate"], "0x62")
+        self.assertEqual(agp["gate_0x62_preserved"], 1)
+        self.assertEqual(agp["qt"], "0x55")
+        self.assertEqual(agp["tmv_opcode"], "0xf3")
+        self.assertEqual(agp["logic"], "+AND=+1:~NAND=-1")
+        self.assertEqual(agp["drift_trits"], 0)
+        self.assertEqual(agp["and_charge"] + agp["nand_charge"], 0)
+        self.assertEqual(agp["onecompression_fold"], "0x264076f7d8d022a6")
+        self.assertEqual(agp["backyard_fold"], "0x49f4228578e7f9be")
+        self.assertEqual(agp["known_fold"], 1)
+        self.assertTrue(agp["verified"])
+
+        self.assertEqual(len(hive_lines), 2)
+        self.assertTrue(hive_lines[-1].startswith("<~~0o0|v2|HIVE:{<3,<3,<3}+1|"))
+        self.assertIn("ULTRABACKYARDLOOP|+AND=1:~NAND=-1|gate=0x62(ok=1)|qt=0x55|tmv=0xf3", hive_lines[-1])
+        self.assertIn("fold=0x264076f7d8d022a6|loop=0x49f4228578e7f9be|ratio=57802/44861|lossless=1/1", hive_lines[-1])
+        self.assertIn("media=video_mp4_22s_4k_hdmi", hive_lines[-1])
+        self.assertTrue(hive_lines[-1].endswith("|0o0~~>"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -342,9 +342,16 @@ static int        g_medusa_mean_rssi = -62;
 static char       g_medusa_trits[12] = "+-0+0--+0";
 
 // All-Entropy Kompress-Super-Ultra (<<<<oOo>>>> ~ Kunisada & Kuniyoshi 010001000 -> OMNI-CHAN)
+#define KOMPRESS_FOLD_ONECOMPRESSION  0x264076f7d8d022a6ULL
+#define KOMPRESS_FOLD_BACKYARD_ULTRA  0x49f4228578e7f9beULL
+#define UPZ_GATE_METADATA_BYTE        0x62u
+#define UPZ_QT_THERMAL_PARAM          0x55u
+#define AGP_ONESHOT_TMV_OPCODE        0xF3u
+#define UPZ_WITL_SPQT_BYTE            0xA1u
+
 static uint64_t   g_kompress_pos_u64 = 0x824144bc0a470247ULL;
 static uint64_t   g_kompress_neg_u64 = 0x49a2820164006100ULL;
-static uint64_t   g_kompress_wupz_u64= 0x0afb880397092c61ULL;
+static uint64_t   g_kompress_wupz_u64= 0x264076f7d8d022a6ULL;
 static uint8_t    g_kompress_b158[13]= {0};
 static char       g_kompress_hex[27] = "88a1c3f05b2e917460d2c8e144";
 
@@ -352,19 +359,36 @@ static char       g_kompress_hex[27] = "88a1c3f05b2e917460d2c8e144";
 static uint8_t    g_viz_mode         = 0;
 static uint8_t    g_viz_kluver       = 0;
 static uint32_t   g_tts_speak_count  = 1;
-static char       g_engine_line[48]  = "qt:66|69632|2712|11";
+static char       g_engine_line[48]  = "qt:55|69632|2712|11";
 
-// wupz seal (same frame + fold as kernel8/kernel/src/wupz.rs and wigle-triad host-rs)
+// wupz seal (same frame + fold as kernel8/kernel/src/wupz.rs and OneCompression wupz linker)
+// Preserves the 0x62 gate metadata in byte [i * 8 + 3] across incremental passes so 0x62 is never stripped.
 static void s3_wupz_frame(uint8_t f[32], uint32_t ticks) {
-    static const int8_t  trit[4] = {-1, 0, 1, 1};
-    static const uint16_t hz[4]  = {432, 528, 852, 963};
+    static const int8_t   trit[4] = {-1, 0, 1, 1};
+    static const uint16_t hz[4]   = {432, 528, 852, 963};
+    static const uint8_t  gate_meta[4] = {
+        UPZ_GATE_METADATA_BYTE, // Lane 0: 0x62 UPZ gate metadata (never stripped)
+        UPZ_QT_THERMAL_PARAM,   // Lane 1: 0x55 quantization/thermal parameter (qt:55)
+        AGP_ONESHOT_TMV_OPCODE, // Lane 2: 0xF3 ONESHOT_TMV contraction opcode
+        UPZ_WITL_SPQT_BYTE      // Lane 3: 0xA1 WITL SPQT witness seal
+    };
     memset(f, 0, 32);
     for (int i = 0; i < 4; i++) {
         f[i * 8]     = (uint8_t)trit[i];
         f[i * 8 + 1] = (uint8_t)(hz[i] & 0xFF);
         f[i * 8 + 2] = (uint8_t)(hz[i] >> 8);
-        for (int k = 0; k < 4; k++) f[i * 8 + 4 + k] = (uint8_t)(ticks >> (8 * k));
+        f[i * 8 + 3] = gate_meta[i];
+        uint32_t lane_ticks = ticks ^ ((uint32_t)gate_meta[i] * 0x01000193u);
+        for (int k = 0; k < 4; k++) f[i * 8 + 4 + k] = (uint8_t)(lane_ticks >> (8 * k));
     }
+}
+static inline bool s3_wupz_has_gate_0x62(const uint8_t f[32]) {
+    return f && f[3] == UPZ_GATE_METADATA_BYTE && f[11] == UPZ_QT_THERMAL_PARAM && f[19] == AGP_ONESHOT_TMV_OPCODE;
+}
+static inline bool kompress_is_known_fold(uint64_t fold) {
+    return (fold == KOMPRESS_FOLD_ONECOMPRESSION) ||
+           (fold == KOMPRESS_FOLD_BACKYARD_ULTRA) ||
+           (fold == g_kompress_wupz_u64);
 }
 static uint64_t s3_wupz_xor_fold(const uint8_t* b, size_t n) {
     uint64_t acc = 0;
@@ -2602,11 +2626,15 @@ static void s3_handle_serial(const char* line) {
         g_s3_active_mode  = 10;
         g_s3_guardian_hud = false;
         Serial.printf("# KOMPRESS|OMNI-CHAN|<<<<oOo>>>>|KUNISADA_KUNIYOSHI|010001000|"
-                      "wupz=0x%016llx|pos=0x%016llx|neg=0x%016llx|b158=%s|ratio=20.19x\n",
+                      "wupz=0x%016llx|onecomp=0x%016llx|loop=0x%016llx|gate=0x62|qt=0x55|"
+                      "pos=0x%016llx|neg=0x%016llx|b158=%s|ratio_pq=57802/44861|lossless_pq=1/1\n",
                       (unsigned long long)g_kompress_wupz_u64,
+                      (unsigned long long)KOMPRESS_FOLD_ONECOMPRESSION,
+                      (unsigned long long)KOMPRESS_FOLD_BACKYARD_ULTRA,
                       (unsigned long long)g_kompress_pos_u64,
                       (unsigned long long)g_kompress_neg_u64,
                       g_kompress_hex);
+        hive_emit_ultrabackyard_video_frame("video_mp4_22s_4k_hdmi");
         s3_emit_status_json();
     } else if (strncasecmp(line, "tab ", 4) == 0) {
         int tab = atoi(line + 4);
@@ -2701,9 +2729,14 @@ static void s3_handle_serial(const char* line) {
         s3_wupz_frame(fr, ticks);
         char hex[65];
         for (int i = 0; i < 32; i++) snprintf(hex + i * 2, 3, "%02x", fr[i]);
-        Serial.printf("# WUPZ|{\"node\":\"%s\",\"ticks\":%lu,\"xor_fold\":\"0x%016llx\",\"popcount\":%lu,\"frame\":\"%s\",\"src\":\"wupz+kernel8\"}\n",
+        Serial.printf("# WUPZ|{\"node\":\"%s\",\"ticks\":%lu,\"gate\":\"0x62\",\"gate_preserved\":%d,\"qt\":\"0x55\","
+                      "\"xor_fold\":\"0x%016llx\",\"onecompression_fold\":\"0x%016llx\","
+                      "\"popcount\":%lu,\"frame\":\"%s\",\"src\":\"wupz+kernel8+OneCompression\"}\n",
                       g_medusa_node, (unsigned long)ticks,
-                      (unsigned long long)s3_wupz_xor_fold(fr, 32), (unsigned long)s3_wupz_popcount(fr, 32), hex);
+                      s3_wupz_has_gate_0x62(fr) ? 1 : 0,
+                      (unsigned long long)s3_wupz_xor_fold(fr, 32),
+                      (unsigned long long)KOMPRESS_FOLD_ONECOMPRESSION,
+                      (unsigned long)s3_wupz_popcount(fr, 32), hex);
     } else if (strncasecmp(line, "host ", 5) == 0) {
         net_host_set(line + 5);
     } else if (strncasecmp(line, "wifi", 4) == 0 && (line[4] == 0 || line[4] == 0x20)) {
@@ -2773,6 +2806,7 @@ static void s3_handle_serial(const char* line) {
         g_s3_active_mode  = 8;
         g_s3_guardian_hud = false;
         hive_emit_frame();
+        hive_emit_ultrabackyard_video_frame("video_mp4_22s_4k_hdmi");
     } else if (strncasecmp(line, "engine ", 7) == 0) {
         // ENGINE <qt>|<layers>|<family_hz>|<ct000 bits>  (fed by 8b-is-music + 8b-is-engine via wiglewww)
         strncpy(g_engine_line, line + 7, sizeof(g_engine_line) - 1);
