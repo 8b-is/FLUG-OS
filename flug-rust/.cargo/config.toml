@@ -1,0 +1,33 @@
+# ============================================================
+# Cargo Configuration for ESP32-S3 (Xtensa)
+# ============================================================
+# The Xtensa architecture doesn't have pre-built std libraries,
+# so we MUST build std from source. This file tells cargo how.
+#
+# Without this file you'll get:
+#   "can't find crate for `core`"
+# because there's no pre-compiled standard library for Xtensa.
+#
+# Trisha says: "It's like building your own accounting software
+# from scratch instead of buying QuickBooks. More work, but
+# you know EXACTLY what's in there." 📊
+# ============================================================
+
+[build]
+# Default target - no need to pass --target every time!
+target = "xtensa-esp32s3-espidf"
+
+[target.xtensa-esp32s3-espidf]
+# ldproxy bridges cargo's linker invocation to ESP-IDF's CMake build
+linker = "ldproxy"
+
+# ESP-IDF needs 64-bit time_t
+rustflags = ["--cfg", "espidf_time64"]
+
+# Uncomment to auto-flash+monitor on `cargo run`:
+# runner = "espflash flash --monitor"
+
+[unstable]
+# THIS IS THE KEY! Build the Rust standard library from source
+# for our Xtensa target. Without this, nothing compiles.
+build-std = ["std", "panic_abort"]

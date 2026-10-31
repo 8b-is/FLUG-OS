@@ -1,0 +1,12 @@
+# ============================================================
+# Rust Toolchain for ESP32-S3 (Xtensa architecture)
+# ============================================================
+# The ESP32-S3 uses Xtensa LX7 cores, which require Espressif's
+# forked Rust compiler (the "esp" channel). Install via:
+#   espup install
+#
+# This file tells cargo to automatically use the right toolchain.
+# ============================================================
+
+[toolchain]
+channel = "esp"

@@ -1,0 +1,70 @@
+# ============================================================
+# baye-rust ESP-IDF Configuration
+# ============================================================
+# These Kconfig options configure the ESP-IDF framework.
+# They're the equivalent of MiniMem8's platformio.ini build flags.
+#
+# CRITICAL: PSRAM and flash settings MUST match the hardware!
+# Waveshare ESP32-S3-Touch-AMOLED-1.8:
+#   - 8MB Octal PSRAM (OPI @ 80MHz)
+#   - 16MB QIO Flash
+#   - 240MHz dual-core Xtensa LX7
+# ============================================================
+
+# --- CPU ---
+CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240=y
+
+# --- Flash: 16MB QIO ---
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+
+# --- PSRAM: 8MB Octal (OPI) ---
+# This is CRITICAL! Without PSRAM we can't fit:
+#   - Framebuffer (322KB)
+#   - Wave pool (320KB)
+#   - Memory ring (3.4MB)
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+# Allow malloc to use PSRAM for large allocations
+CONFIG_SPIRAM_USE_CAPS_ALLOC=y
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768
+
+# --- FreeRTOS ---
+CONFIG_FREERTOS_HZ=1000
+# Enable FreeRTOS task pinning to specific cores
+CONFIG_FREERTOS_UNICORE=n
+# Main task stack: default 3584 is too small — main() has a 2KB slice_buf,
+# deep SPI/DMA/I2S init call chains, and various Option<T> locals.
+# 32KB gives comfortable headroom.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768
+
+# --- WiFi ---
+CONFIG_ESP_WIFI_ENABLED=y
+
+# --- HTTP Server ---
+# WebSocket support required for real-time dashboard streaming.
+# max_uri_handlers raised from default 8 to 16 for API endpoints.
+CONFIG_HTTPD_WS_SUPPORT=y
+CONFIG_HTTPD_MAX_URI_HANDLERS=16
+
+# --- Partition Table ---
+# NOTE: Custom partition table disabled for initial builds.
+# esp-idf-sys's build wrapper changes the project directory,
+# so the relative path to partitions.csv doesn't resolve.
+# We'll enable this in Phase 6 when we need OTA + SPIFFS.
+# For now, default single-factory partition (3MB app) is enough.
+# CONFIG_PARTITION_TABLE_CUSTOM=y
+# CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# --- Logging ---
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
+
+# --- Watchdog ---
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+
+# --- USB CDC (for serial monitor over USB-C) ---
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y

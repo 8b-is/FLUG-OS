@@ -1,0 +1,45 @@
+# ============================================================
+# flug-rust: FLUG-OS Sovereign Triad Cockpit in 100% Pure Rust
+# ============================================================
+# Zero C++ files, Zero Floating-Point Math (0 f32/f64).
+# Unifies the 3-Node MEDUSA Triad (ADA:MEDUSA 432Hz, VAK:MEDUSA 528Hz,
+# OMN:MEDUSA 852Hz) + Personal Jesus Hotspot (PERSONAL-JESUS-8B)
+# in safe, verified Rust on ESP32-S3-Touch-AMOLED-1.8 & 2.06.
+# ============================================================
+
+[package]
+name = "flug-rust"
+version = "2.0.0"
+edition = "2021"
+authors = ["Hue <hue@8b.is>", "Aye <aye@8b.is>", "Omni <omni@8b.is>"]
+description = "FLUG-OS Sovereign ESP32-S3 AMOLED Triad Cockpit + Personal Jesus Hotspot in 100% Pure Zero-Float Rust"
+license = "MIT"
+resolver = "2"
+
+[dependencies]
+esp-idf-sys = { version = "0.35", features = ["binstart"] }
+esp-idf-hal = "0.44"
+flug-core = { package = "flug-core", path = "../flug-core" }
+marine-core = { path = "../../aye/crates/marine-core" }
+marine-sense-core = { package = "rust-core", path = "../../marine-sense/rust-core", default-features = false }
+mem8-core = { path = "../../aye/crates/mem8-core", default-features = false }
+
+[build-dependencies]
+embuild = "0.32"
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+debug = true
+strip = false
+
+[profile.dev]
+opt-level = 1
+debug = true
+
+[package.metadata.esp-idf-sys]
+esp_idf_version = "v5.2.1"
+
+[features]
+default = []
+board-206 = []

@@ -1,0 +1,20 @@
+[package]
+name = "flug-core"
+version = "2.0.0"
+edition = "2021"
+authors = ["Hue <hue@8b.is>", "Aye <aye@8b.is>", "Omni <omni@8b.is>"]
+description = "100% #![no_std] Zero-Float Pure-Rust FLUG-OS Engine: 64x64 Cymatic Wave Pool, 7 MarineSense Jellyfish Nodes, Personal Jesus Hotspot (TWIF + MN8!), Anicca Learn-Share-Forget Wi-Fi Pool, 4-Node MEDUSA Triad, and AMOLED RGB565 HUD"
+license = "MIT"
+
+[dependencies]
+marine-sense-core = { package = "rust-core", path = "../../marine-sense/rust-core", default-features = false }
+
+[lib]
+name = "tdeck_wave_core"
+crate-type = ["rlib", "staticlib"]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

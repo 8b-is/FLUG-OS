@@ -508,66 +508,22 @@ static void s3_es8311_speak(const char* text, uint16_t carrier_hz, int8_t trit) 
     xTaskCreatePinnedToCore(s3_es8311_tts_task, "s3_tts", 4096, NULL, 1, NULL, 0);
 }
 
-// Synthesize BICEP - GLUE asynchronously on Core 0 so the 40 FPS AMOLED UI never stalls!
+extern "C" {
+  void rust_flug_synth_crate_block_i16(int16_t *stereo_out256, uint8_t chord_idx, uint8_t step_idx, uint8_t blk_idx, uint32_t *lfsr_inout);
+}
+
+// Synthesize BICEP - GLUE asynchronously on Core 0 in 100% #![no_std] Zero-Float Rust!
 static void s3_es8311_bicep_task(void* arg) {
     (void)arg;
     digitalWrite(PIN_SPEAKER_EN, HIGH);
     s3_es8311_init_i2s();
     if (g_i2s_tts_ready) {
-        static const float chords[4][4] = {
-            {103.83f, 207.65f, 311.13f, 783.99f},
-            { 87.31f, 174.61f, 261.63f, 698.46f},
-            {130.81f, 261.63f, 392.00f, 622.25f},
-            {116.54f, 233.08f, 349.23f, 587.33f},
-        };
-        static const uint8_t brk[8] = {1, 3, 3, 1, 2, 3, 1, 2};
         int16_t stereo_buf[256];
-        float ph_b1 = 0.0f, ph_b2 = 0.0f, ph_p1 = 0.0f, ph_p2 = 0.0f, ph_vx = 0.0f, ph_k = 0.0f;
         uint32_t lfsr = 0x9A6D44C0u;
-        for (int ch = 0; ch < 4; ch++) {
-            float fb = chords[ch][0], fp1 = chords[ch][1], fp2 = chords[ch][2], fvx = chords[ch][3];
-            for (int step = 0; step < 8; step++) {
-                uint8_t hit = brk[step];
-                for (int blk = 0; blk < 14; blk++) {
-                    float t_step = (float)(blk * 128) / (14.0f * 128.0f);
-                    for (int i = 0; i < 128; i++) {
-                        float t = t_step + (float)i / (14.0f * 128.0f);
-                        ph_b1 += (6.2831853f * fb * 0.994f) / 16000.0f;
-                        ph_b2 += (6.2831853f * fb * 1.006f) / 16000.0f;
-                        ph_p1 += (6.2831853f * fp1) / 16000.0f;
-                        ph_p2 += (6.2831853f * fp2) / 16000.0f;
-                        ph_vx += (6.2831853f * fvx) / 16000.0f;
-                        if (ph_b1 > 6.2831853f) ph_b1 -= 6.2831853f;
-                        if (ph_b2 > 6.2831853f) ph_b2 -= 6.2831853f;
-                        if (ph_p1 > 6.2831853f) ph_p1 -= 6.2831853f;
-                        if (ph_p2 > 6.2831853f) ph_p2 -= 6.2831853f;
-                        if (ph_vx > 6.2831853f) ph_vx -= 6.2831853f;
-
-                        float reese = 0.38f * tanhf(1.6f * (sinf(ph_b1) + sinf(ph_b2)));
-                        float pad   = 0.24f * (sinf(ph_p1) + 0.7f * sinf(ph_p2));
-                        float vox_env = (step == 0 || step == 3 || step == 6) ? (0.5f - 0.5f * cosf(6.2831853f * t)) : 0.15f;
-                        float vox   = 0.22f * sinf(ph_vx) * vox_env;
-
-                        float drum = 0.0f;
-                        if (hit == 1 && t < 0.45f) {
-                            float fk = 52.0f + 110.0f * (1.0f - t * 2.2f);
-                            ph_k += (6.2831853f * fk) / 16000.0f;
-                            drum = 0.55f * sinf(ph_k) * (1.0f - t * 2.2f);
-                        } else if (hit == 2 && t < 0.55f) {
-                            lfsr ^= lfsr << 13; lfsr ^= lfsr >> 17; lfsr ^= lfsr << 5;
-                            float nz = ((float)(int16_t)(lfsr & 0xFFFF) / 32768.0f);
-                            drum = (0.35f * nz + 0.20f * sinf(ph_p1 * 1.1f)) * (1.0f - t * 1.8f);
-                        } else if (hit == 3 && t < 0.20f) {
-                            lfsr ^= lfsr << 13; lfsr ^= lfsr >> 17; lfsr ^= lfsr << 5;
-                            float nz = ((float)(int16_t)(lfsr & 0xFFFF) / 32768.0f);
-                            drum = 0.14f * nz * (1.0f - t * 5.0f);
-                        }
-
-                        float mix = tanhf((reese + pad + vox + drum) * 1.15f);
-                        int16_t s = (int16_t)(mix * 6200.0f);
-                        stereo_buf[i * 2]     = s;
-                        stereo_buf[i * 2 + 1] = s;
-                    }
+        for (uint8_t ch = 0; ch < 4; ch++) {
+            for (uint8_t step = 0; step < 8; step++) {
+                for (uint8_t blk = 0; blk < 14; blk++) {
+                    rust_flug_synth_crate_block_i16(stereo_buf, ch, step, blk, &lfsr);
                     size_t written = 0;
                     i2s_write(I2S_NUM_0, stereo_buf, sizeof(stereo_buf), &written, 20);
                 }
@@ -1096,6 +1052,61 @@ static void s3_amoled_push_band(int y0, int h) {
 
 static void s3_amoled_end_frame() {
     sh8601_cs_high();
+}
+
+// ============================================================
+// AMOLED Anti-Burn-In 9-Point Balanced-Ternary Pixel Orbit & Refresh Wave
+// ============================================================
+static int8_t   g_oled_orbit_dx    = 0; // {-1, 0, +1}
+static int8_t   g_oled_orbit_dy    = 0; // {-1, 0, +1}
+static uint32_t g_oled_refresh_cnt = 0;
+
+static void s3_amoled_step_pixel_orbit(unsigned long now_ms) {
+    static const int8_t kOrbitX[9] = { 0,  1,  1,  0, -1, -1, -1,  0,  1};
+    static const int8_t kOrbitY[9] = { 0,  0,  1,  1,  1,  0, -1, -1, -1};
+    uint32_t idx = (uint32_t)((now_ms / 30000UL) % 9UL);
+    g_oled_orbit_dx = kOrbitX[idx];
+    g_oled_orbit_dy = kOrbitY[idx];
+}
+
+static void s3_amoled_panel_refresh() {
+    if (!s_amoled_spi || !s_band_buf) return;
+    g_oled_refresh_cnt++;
+
+    // 1. Re-assert SH8601 / CO5300 controller state (wake/normal/QIO/dispon)
+    if (g_board_is_18) {
+        sh8601_write_cmd(0x11);            // SLPOUT
+        sh8601_write_cmd(0x13);            // NORON
+        sh8601_write_cmd(0x20);            // INVOFF
+        sh8601_write_cmd_data(0x3A, 0x05); // RGB565
+        sh8601_write_cmd(0x29);            // DISPON
+    } else {
+        sh8601_write_cmd_data(0x36, 0x00); // MADCTL
+        sh8601_write_cmd_data(0x3A, 0x55); // RGB565
+        sh8601_write_cmd(0x11);            // SLPOUT
+        sh8601_write_cmd_data(0xC4, 0x80); // QIO pixel path
+        sh8601_write_cmd(0x29);            // DISPON
+    }
+
+    // 2. Two-pass Anicca OLED pixel-relaxation & subpixel scrub (Constellation wave -> True Black)
+    int H = (int)g_lcd_h;
+    int W = (int)g_lcd_w;
+    static const uint16_t kScrubCols[4] = {COL_MINT_DARK, COL_VIOLET_DARK, COL_GOLD_DARK, COL_VOID};
+    for (int pass = 0; pass < 2; pass++) {
+        s3_amoled_begin_frame();
+        for (int y0 = 0; y0 < H; y0 += AMOLED_BAND_H) {
+            int bh = AMOLED_BAND_H;
+            if (y0 + bh > H) bh = H - y0;
+            uint16_t col = (pass == 0) ? kScrubCols[(y0 / AMOLED_BAND_H) & 3] : COL_VOID;
+            int count = W * bh;
+            for (int i = 0; i < count; i++) {
+                s_band_buf[i] = col;
+            }
+            s3_amoled_push_band(y0, bh);
+        }
+        s3_amoled_end_frame();
+        vTaskDelay(pdMS_TO_TICKS(18));
+    }
 }
 
 // ============================================================
