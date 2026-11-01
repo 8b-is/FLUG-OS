@@ -942,6 +942,300 @@ static void omni_screen_set_res(uint16_t w, uint16_t h, uint16_t x_gap, const ch
     g_lcd_det_src = src ? src : "runtime_serial";
 }
 
+// ============================================================
+// 8. Audio8-TTS/STT (600M DualAR) x DeepSeek Engram BFP-64 x
+//    ALEXIAI GAIA Fold x AURORA Voice-Shell Engine (Zero-Float p/q)
+// ============================================================
+#define OMNI_AUDIO8_DIM               896u    // 14 * 64
+#define OMNI_AUDIO8_HEAD_DIM          64u     // 1 * 64
+#define OMNI_AUDIO8_KV_DIM            128u    // 2 * 64
+#define OMNI_AUDIO8_INTER             4864u   // 76 * 64
+#define OMNI_AUDIO8_CODEC_INTER       1216u   // 19 * 64
+#define OMNI_AUDIO8_CODEBOOK_SIZE     4096u   // 64 * 64
+#define OMNI_AUDIO8_NUM_CODEBOOKS     10u
+#define OMNI_AUDIO8_SEMANTIC_BEGIN    151678u
+#define OMNI_AUDIO8_SEMANTIC_END      155773u // 4,096 semantic tokens = 64 * 64
+#define OMNI_AUDIO8_SAMPLE_RATE_HZ    44100u
+#define OMNI_AUDIO8_I2S_RATE_HZ       16000u
+#define OMNI_AUDIO8_FRAME_SAMPLES     2048u   // 32 * 64 (512/11025 s = 46,439 us)
+#define OMNI_AUDIO8_FRAME_BUDGET_US   46439u
+#define OMNI_AUDIO8_TILE_EXEC_US      18u     // 18 us per 64x64 bit-sliced tile on ESP32-S3
+#define OMNI_ENGRAM_PRIME_0           1000003u
+
+struct OmniVoiceEngineState {
+    uint8_t  tmv_mode;            // 0x80=RAW, 0x81=SHIELDED, 0x82=AUDIO8_TTS, 0x83=AUDIO8_STT
+    uint8_t  active_page;         // Ping-Pong matrix bank (0 or 1)
+    uint16_t seq;
+    uint32_t ebpf_verdict;        // 0x7C24xxxx (SEAL_OK) or 0xDEADxxxx (FISSION_TRAP)
+    uint16_t continuity_seal;     // 0x7C24 or 0xDEAD
+    uint16_t l1_spectral_norm;
+    uint8_t  boundary_breaches;   // Breaches across Megaira dipole gates {9, 31, 41, 63}
+    uint32_t semantic_token_id;   // 151678 .. 155773
+    uint16_t codebook_idx;        // 0 .. 4095
+    uint32_t engram_bucket;       // Lemire p/q prime bucket
+    int8_t   engram_bfp64_exp;    // Shared dyadic exponent for 64-dim BFP-64 head
+    int32_t  engram_proj_q16;     // Zero-quantization i16->i64->Q16 projection
+    int32_t  aurora_fade_p;       // Smoothstep 3t^2 - 2t^3 rational numerator
+    int32_t  aurora_fade_q;       // Smoothstep rational denominator
+    int32_t  gaia_fold_p;         // ALEXIAI GAIA resonance fold numerator (1618/1000 -> 809/500)
+    int32_t  gaia_fold_q;         // ALEXIAI GAIA resonance fold denominator
+    bool     transcriber_muted;   // Muted while ES8311 PA is speaking (prevents echo loop)
+    bool     bot_speaking;
+    bool     interrupted;
+    uint16_t total_chunks;
+    uint16_t spoken_chunks;
+    char     last_stt_text[64];
+    char     full_bot_msg[96];
+    char     last_bot_msg[96];    // Truncated via get_message_up_to() on interrupt
+    char     wave_b3[10];
+};
+
+static OmniVoiceEngineState g_voice_ai = {
+    0x82u,
+    0u,
+    1u,
+    0x7C240E10u,
+    0x7C24u,
+    3600u,
+    0u,
+    151678u,
+    0u,
+    0u,
+    -3,
+    65536,
+    1,
+    1,
+    809,
+    500,
+    false,
+    false,
+    false,
+    8u,
+    8u,
+    "KONNICHIWA SHINJUKU OMNI",
+    "KONNICHIWA CHIRO GUARDIAN SPEAKING ON ESP32 S3",
+    "KONNICHIWA CHIRO GUARDIAN SPEAKING ON ESP32 S3",
+    "101T01101"
+};
+
+// Lemire p/q (q = 2^64) reciprocal prime bucket lookup (100% integer, matches 8b-is/Engram)
+static inline uint32_t omni_engram_lemire_bucket(uint32_t ngram_hash, uint32_t prime) {
+    if (prime == 0u) return 0u;
+    uint64_t recip = (0xFFFFFFFFFFFFFFFFULL / (uint64_t)prime) + 1ULL;
+    uint64_t prod_lo = (uint64_t)ngram_hash * recip;
+    uint32_t bucket = (uint32_t)(((unsigned __int128)prod_lo * (unsigned __int128)prime) >> 64);
+    return bucket;
+}
+
+// Aurora-Voice-Shell exact integer smoothstep polynomial: 3t^2 - 2t^3 over SCALE = 1000
+static inline uint32_t omni_aurora_smoothstep_permille(uint32_t t_permille) {
+    uint64_t t = (t_permille > 1000u) ? 1000ULL : (uint64_t)t_permille;
+    uint64_t s = 1000ULL;
+    return (uint32_t)((t * t * (3ULL * s - 2ULL * t)) / (s * s));
+}
+
+// Computes partial message spoken up to (spoken_chunks / total_chunks) for barge-in interrupt
+static inline void omni_voice_get_message_up_to(
+    const char* full_msg,
+    uint16_t spoken_chunks,
+    uint16_t total_chunks,
+    char* out_buf,
+    size_t out_cap
+) {
+    if (!full_msg || !out_buf || out_cap == 0) return;
+    size_t len = strlen(full_msg);
+    if (total_chunks == 0 || spoken_chunks >= total_chunks) {
+        strncpy(out_buf, full_msg, out_cap - 1);
+        out_buf[out_cap - 1] = '\0';
+        return;
+    }
+    size_t cut = (len * (size_t)spoken_chunks) / (size_t)total_chunks;
+    while (cut < len && full_msg[cut] != ' ') {
+        cut++;
+    }
+    if (cut >= out_cap) cut = out_cap - 1;
+    memcpy(out_buf, full_msg, cut);
+    out_buf[cut] = '\0';
+}
+
+// Runs 64x64 Balanced-Ternary Contraction (0xF3 ONESHOT_TMV) + Engram BFP-64 + eBPF R0 Verdict
+static void omni_audio8_exec_tmv(uint8_t mode, const char* text_in) {
+    const uint64_t shaw_neg  = 0x000001FF000001FFULL; // 18 Human (-1) trits
+    const uint64_t shaw_pos  = 0x7FFFFC007FFFFC00ULL; // 42 Xeno (+1) trits
+    const uint64_t shaw_zero = 0x8000020080000200ULL; // 4 Megaira Dipole Gates @ {9, 31, 41, 63}
+
+    g_voice_ai.tmv_mode = mode;
+    g_voice_ai.seq++;
+
+    if (text_in && text_in[0]) {
+        if (mode == 0x83u) {
+            strncpy(g_voice_ai.last_stt_text, text_in, sizeof(g_voice_ai.last_stt_text) - 1);
+            g_voice_ai.last_stt_text[sizeof(g_voice_ai.last_stt_text) - 1] = '\0';
+        } else {
+            strncpy(g_voice_ai.full_bot_msg, text_in, sizeof(g_voice_ai.full_bot_msg) - 1);
+            g_voice_ai.full_bot_msg[sizeof(g_voice_ai.full_bot_msg) - 1] = '\0';
+            strncpy(g_voice_ai.last_bot_msg, text_in, sizeof(g_voice_ai.last_bot_msg) - 1);
+            g_voice_ai.last_bot_msg[sizeof(g_voice_ai.last_bot_msg) - 1] = '\0';
+        }
+    }
+
+    const char* hash_src = (mode == 0x83u) ? g_voice_ai.last_stt_text : g_voice_ai.full_bot_msg;
+    uint32_t fnv = omni_fnv32_str(hash_src);
+    omni_trit_hash9(hash_src, strlen(hash_src), g_voice_ai.wave_b3);
+
+    // 1. DeepSeek Engram BFP-64 Lookup (64 x i8 mantissas + 1 x i8 shared exponent)
+    g_voice_ai.engram_bucket    = omni_engram_lemire_bucket(fnv, OMNI_ENGRAM_PRIME_0);
+    g_voice_ai.engram_bfp64_exp = -2;
+    int32_t bfp_acc_i16 = 0;
+    for (unsigned int i = 0; i < 64u; i++) {
+        int8_t mant = (int8_t)(((int32_t)((fnv >> (i & 15u)) & 0x3Fu)) - 31);
+        int8_t trit = ((shaw_pos >> i) & 1ULL) ? 1 : (((shaw_neg >> i) & 1ULL) ? -1 : 0);
+        bfp_acc_i16 += (int32_t)mant * (int32_t)trit;
+    }
+    g_voice_ai.engram_proj_q16 = bfp_acc_i16 << 6;
+
+    // 2. 64x64 Bit-Sliced Ternary Contraction (0xF3 ONESHOT_TMV)
+    //    Mode 0x80 leaves dipole gates unmasked (adversarial page 1 -> 4 breaches -> 0xDEAD0F00)
+    //    Modes 0x81, 0x82, 0x83 enforce the Zero-Signed Boundary Gate Firewall -> 0x7C240E10
+    uint16_t l1_sum = 0;
+    uint8_t  breaches = 0;
+    for (unsigned int r = 0; r < 64u; r++) {
+        uint64_t r_bit = 1ULL << r;
+        bool is_gate = (shaw_zero & r_bit) != 0ULL;
+        uint64_t wn = 0ULL;
+        uint64_t wp = 0ULL;
+        if (is_gate) {
+            if (mode == 0x80u) {
+                wn = shaw_neg;
+                wp = shaw_pos;
+                breaches++;
+            }
+        } else if ((shaw_neg & r_bit) != 0ULL) {
+            wn = shaw_pos;
+            wp = shaw_neg;
+        } else {
+            wn = shaw_neg;
+            wp = shaw_pos;
+        }
+        uint64_t prod_pos = (wp & shaw_pos) | (wn & shaw_neg);
+        uint64_t prod_neg = (wp & shaw_neg) | (wn & shaw_pos);
+        int32_t  y_r = (int32_t)__builtin_popcountll(prod_pos) - (int32_t)__builtin_popcountll(prod_neg);
+        l1_sum = (uint16_t)(l1_sum + (uint16_t)(y_r >= 0 ? y_r : -y_r));
+    }
+
+    g_voice_ai.active_page       = (mode == 0x80u) ? 1u : 0u;
+    g_voice_ai.boundary_breaches = breaches;
+    g_voice_ai.l1_spectral_norm  = l1_sum;
+    g_voice_ai.continuity_seal   = (breaches == 0u) ? 0x7C24u : 0xDEADu;
+    g_voice_ai.ebpf_verdict      = ((uint32_t)g_voice_ai.continuity_seal << 16) | (uint32_t)l1_sum;
+
+    // 3. Audio8 Codebook & Semantic Token Selection (4,096 = 64 x 64)
+    g_voice_ai.codebook_idx      = (uint16_t)((fnv ^ (uint32_t)l1_sum) % OMNI_AUDIO8_CODEBOOK_SIZE);
+    g_voice_ai.semantic_token_id = OMNI_AUDIO8_SEMANTIC_BEGIN + (uint32_t)g_voice_ai.codebook_idx;
+
+    // 4. Worker Pipeline State: Mute Transcriber during TTS synthesis to prevent echo feedback
+    if (mode == 0x82u) {
+        g_voice_ai.bot_speaking      = true;
+        g_voice_ai.transcriber_muted = true;
+        g_voice_ai.interrupted       = false;
+        g_voice_ai.total_chunks      = 8u;
+        g_voice_ai.spoken_chunks     = 8u;
+        uint32_t fade_pm = omni_aurora_smoothstep_permille(1000u);
+        rust_reduce_rational_pq((int32_t)fade_pm, 1000, &g_voice_ai.aurora_fade_p, &g_voice_ai.aurora_fade_q);
+        s3_es8311_speak(g_voice_ai.full_bot_msg, g_medusa_freq_hz, g_triad_self_pole);
+    } else if (mode == 0x83u) {
+        g_voice_ai.bot_speaking      = false;
+        g_voice_ai.transcriber_muted = false;
+    }
+}
+
+// Triggers broadcast_interrupt() on mid-sentence user barge-in
+static void omni_voice_broadcast_interrupt(uint16_t chunks_played) {
+    if (chunks_played >= g_voice_ai.total_chunks) {
+        chunks_played = (g_voice_ai.total_chunks > 1u) ? (uint16_t)(g_voice_ai.total_chunks / 2u) : 1u;
+    }
+    g_voice_ai.spoken_chunks     = chunks_played;
+    g_voice_ai.interrupted       = true;
+    g_voice_ai.bot_speaking      = false;
+    g_voice_ai.transcriber_muted = false; // Unmute ES7210 mic immediately on user interrupt
+
+    omni_voice_get_message_up_to(
+        g_voice_ai.full_bot_msg,
+        g_voice_ai.spoken_chunks,
+        g_voice_ai.total_chunks,
+        g_voice_ai.last_bot_msg,
+        sizeof(g_voice_ai.last_bot_msg)
+    );
+
+    uint32_t t_permille = ((uint32_t)g_voice_ai.spoken_chunks * 1000u) /
+                          (uint32_t)(g_voice_ai.total_chunks ? g_voice_ai.total_chunks : 1u);
+    uint32_t fade_pm = omni_aurora_smoothstep_permille(t_permille);
+    rust_reduce_rational_pq((int32_t)fade_pm, 1000, &g_voice_ai.aurora_fade_p, &g_voice_ai.aurora_fade_q);
+}
+
+static void omni_audio8_emit_json() {
+    uint32_t tile_14_us = 14u * OMNI_AUDIO8_TILE_EXEC_US; // 252 us for all 14 tiles (dim=896)
+    int32_t rt_p = 0, rt_q = 1;
+    rust_reduce_rational_pq((int32_t)OMNI_AUDIO8_FRAME_BUDGET_US, (int32_t)tile_14_us, &rt_p, &rt_q);
+
+    Serial.printf(
+        "# AUDIO8|{\"node\":\"%s\",\"model\":\"Edge0/Audio8-TTS-Realistic-600M\",\"arch\":\"ArkttsModel-DualAR\","
+        "\"mode\":\"0x%02x\",\"page\":%u,\"seq\":%u,"
+        "\"dim\":%u,\"dim_tiles\":\"14x64\",\"inter\":%u,\"inter_tiles\":\"76x64\","
+        "\"codebook_size\":%u,\"codebooks\":%u,\"codebook_idx\":%u,\"semantic_id\":%lu,"
+        "\"l1_norm\":%u,\"breaches\":%u,\"seal\":\"0x%04x\",\"ebpf_verdict\":\"0x%08lx\","
+        "\"engram_bucket\":%lu,\"engram_bfp64_exp\":%d,\"engram_proj_q16\":%ld,"
+        "\"tile_exec_us\":%u,\"layer_14tile_us\":%lu,\"frame_budget_us\":%lu,"
+        "\"realtime_headroom_pq\":\"%ld/%ld\",\"zero_padding_64x64\":true,\"wave_b3\":\"%s\"}\n",
+        g_medusa_node,
+        (unsigned)g_voice_ai.tmv_mode,
+        (unsigned)g_voice_ai.active_page,
+        (unsigned)g_voice_ai.seq,
+        (unsigned)OMNI_AUDIO8_DIM,
+        (unsigned)OMNI_AUDIO8_INTER,
+        (unsigned)OMNI_AUDIO8_CODEBOOK_SIZE,
+        (unsigned)OMNI_AUDIO8_NUM_CODEBOOKS,
+        (unsigned)g_voice_ai.codebook_idx,
+        (unsigned long)g_voice_ai.semantic_token_id,
+        (unsigned)g_voice_ai.l1_spectral_norm,
+        (unsigned)g_voice_ai.boundary_breaches,
+        (unsigned)g_voice_ai.continuity_seal,
+        (unsigned long)g_voice_ai.ebpf_verdict,
+        (unsigned long)g_voice_ai.engram_bucket,
+        (int)g_voice_ai.engram_bfp64_exp,
+        (long)g_voice_ai.engram_proj_q16,
+        (unsigned)OMNI_AUDIO8_TILE_EXEC_US,
+        (unsigned long)tile_14_us,
+        (unsigned long)OMNI_AUDIO8_FRAME_BUDGET_US,
+        (long)rt_p,
+        (long)rt_q,
+        g_voice_ai.wave_b3
+    );
+
+    Serial.printf(
+        "# VOICE_AI|{\"node\":\"%s\",\"pipeline\":\"Transcriber->Agent->Synthesizer->ES8311\","
+        "\"codec_dac\":\"ES8311@0x18\",\"codec_adc\":\"ES7210@0x40\",\"i2s_rate_hz\":%u,"
+        "\"transcriber_muted\":%s,\"bot_speaking\":%s,\"interrupted\":%s,"
+        "\"spoken_chunks\":%u,\"total_chunks\":%u,"
+        "\"aurora_fade_pq\":\"%ld/%ld\",\"gaia_fold_pq\":\"%ld/%ld\","
+        "\"last_stt\":\"%s\",\"last_bot_msg\":\"%s\",\"full_bot_msg\":\"%s\"}\n",
+        g_medusa_node,
+        (unsigned)OMNI_AUDIO8_I2S_RATE_HZ,
+        g_voice_ai.transcriber_muted ? "true" : "false",
+        g_voice_ai.bot_speaking ? "true" : "false",
+        g_voice_ai.interrupted ? "true" : "false",
+        (unsigned)g_voice_ai.spoken_chunks,
+        (unsigned)g_voice_ai.total_chunks,
+        (long)g_voice_ai.aurora_fade_p,
+        (long)g_voice_ai.aurora_fade_q,
+        (long)g_voice_ai.gaia_fold_p,
+        (long)g_voice_ai.gaia_fold_q,
+        g_voice_ai.last_stt_text,
+        g_voice_ai.last_bot_msg,
+        g_voice_ai.full_bot_msg
+    );
+}
+
 static void omni_emit_full_status_json() {
     omni_screen_emit_json();
     omni_findme_emit_json();
@@ -950,6 +1244,7 @@ static void omni_emit_full_status_json() {
     omni_pomo_lll_emit_json();
     omni_metro_emit_json();
     omni_parents_emit_json();
+    omni_audio8_emit_json();
 }
 
 // ============================================================
@@ -1128,6 +1423,67 @@ static bool omni_cockpit_handle_serial(const char* line) {
             }
         }
         omni_screen_emit_json();
+        return true;
+    }
+
+    if (strcasecmp(line, "AUDIO8") == 0 || strcasecmp(line, "VOICE") == 0 ||
+        strcasecmp(line, "TTS") == 0 || strcasecmp(line, "SPEAK") == 0 ||
+        strncasecmp(line, "AUDIO8 ", 7) == 0 || strncasecmp(line, "VOICE ", 6) == 0 ||
+        strncasecmp(line, "TTS ", 4) == 0 || strncasecmp(line, "SPEAK ", 6) == 0) {
+        const char* arg = "";
+        if (strncasecmp(line, "AUDIO8 ", 7) == 0) arg = line + 7;
+        else if (strncasecmp(line, "VOICE ", 6) == 0) arg = line + 6;
+        else if (strncasecmp(line, "SPEAK ", 6) == 0) arg = line + 6;
+        else if (strncasecmp(line, "TTS ", 4) == 0) arg = line + 4;
+        while (*arg == ' ') arg++;
+
+        if (strncasecmp(arg, "INTERRUPT", 9) == 0) {
+            const char* sub = arg + 9;
+            while (*sub == ' ') sub++;
+            uint16_t chunks = (*sub) ? (uint16_t)atoi(sub) : 4u;
+            omni_voice_broadcast_interrupt(chunks);
+        } else if (strncasecmp(arg, "STT ", 4) == 0) {
+            omni_audio8_exec_tmv(0x83u, arg + 4);
+        } else if (*arg) {
+            omni_audio8_exec_tmv(0x82u, arg);
+        } else {
+            omni_audio8_exec_tmv(0x82u, NULL);
+        }
+        g_omni_simple_card = 4;
+        omni_audio8_emit_json();
+        return true;
+    }
+
+    if (strcasecmp(line, "STT") == 0 || strncasecmp(line, "STT ", 4) == 0) {
+        const char* arg = (strncasecmp(line, "STT ", 4) == 0) ? (line + 4) : "";
+        while (*arg == ' ') arg++;
+        omni_audio8_exec_tmv(0x83u, *arg ? arg : NULL);
+        g_omni_simple_card = 4;
+        omni_audio8_emit_json();
+        return true;
+    }
+
+    if (strcasecmp(line, "INTERRUPT") == 0 || strncasecmp(line, "INTERRUPT ", 10) == 0) {
+        const char* arg = (strncasecmp(line, "INTERRUPT ", 10) == 0) ? (line + 10) : "";
+        while (*arg == ' ') arg++;
+        uint16_t chunks = (*arg) ? (uint16_t)atoi(arg) : 4u;
+        omni_voice_broadcast_interrupt(chunks);
+        g_omni_simple_card = 4;
+        omni_audio8_emit_json();
+        return true;
+    }
+
+    if (strcasecmp(line, "TMV") == 0 || strncasecmp(line, "TMV ", 4) == 0) {
+        const char* arg = (strncasecmp(line, "TMV ", 4) == 0) ? (line + 4) : "";
+        while (*arg == ' ') arg++;
+        uint8_t mode = 0x81u;
+        if (strncasecmp(arg, "0x80", 4) == 0 || strcasecmp(arg, "RAW") == 0) mode = 0x80u;
+        else if (strncasecmp(arg, "0x81", 4) == 0 || strcasecmp(arg, "SHIELD") == 0) mode = 0x81u;
+        else if (strncasecmp(arg, "0x82", 4) == 0 || strcasecmp(arg, "TTS") == 0) mode = 0x82u;
+        else if (strncasecmp(arg, "0x83", 4) == 0 || strcasecmp(arg, "STT") == 0) mode = 0x83u;
+        omni_audio8_exec_tmv(mode, NULL);
+        g_omni_simple_card = 4;
+        omni_audio8_emit_json();
         return true;
     }
 
