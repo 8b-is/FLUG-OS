@@ -511,6 +511,128 @@ int main() {
         self.assertIn("media=video_mp4_22s_4k_hdmi", hive_lines[-1])
         self.assertTrue(hive_lines[-1].endswith("|0o0~~>"))
 
+    def test_audio8_tts_stt_engram_bfp64_and_voice_interrupt_pipeline(self):
+        cpp_voice_test = r"""
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <strings.h>
+
+struct MockSerial {
+    template <typename... Args>
+    void printf(const char* fmt, Args... args) {
+        ::printf(fmt, args...);
+    }
+} Serial;
+
+struct MockPower { uint16_t batt_mv = 4150; } g_power;
+struct MockImu { int16_t ax_mg = 0, ay_mg = 0, az_mg = 1000; } g_imu;
+struct S3MedusaAp { bool used; uint8_t bssid[6]; char ssid[33]; uint8_t ch; int8_t rssi; };
+static S3MedusaAp  g_medusa_aps[16];
+static uint8_t     g_medusa_ap_count = 0;
+static const char* g_medusa_node = "OMN:MEDUSA";
+static uint16_t    g_medusa_freq_hz = 852;
+static int8_t      g_triad_self_pole = 1;
+static uint8_t     g_s3_last_probed_mac[6] = {0};
+static int8_t      g_s3_last_rssi = -47;
+static uint8_t     g_s3_active_tab = 0;
+static bool        g_board_is_18 = false;
+static uint16_t    g_lcd_w = 410;
+static uint16_t    g_lcd_h = 502;
+static uint16_t    g_hw_lcd_w = 410;
+static uint16_t    g_hw_lcd_h = 502;
+static uint16_t    g_lcd_x_gap = 22;
+static uint16_t    g_lcd_y_gap = 0;
+static const char* g_lcd_driver_name = "CO5300";
+static const char* g_lcd_det_src = "efuse_mac+i2c_es7210";
+static const char* g_board_model_name = "ESP32-S3-Touch-AMOLED-410x502";
+
+static unsigned long millis() { return 5000; }
+extern "C" void rust_reduce_rational_pq(int32_t num, int32_t den, int32_t* out_p, int32_t* out_q) {
+    if (den == 0) { *out_p = 0; *out_q = 1; return; }
+    if (den < 0) { num = -num; den = -den; }
+    if (num == 0) { *out_p = 0; *out_q = 1; return; }
+    int32_t a = num < 0 ? -num : num, b = den;
+    while (b != 0) { int32_t t = a % b; a = b; b = t; }
+    *out_p = num / a; *out_q = den / a;
+}
+
+static int g_speak_calls = 0;
+static void s3_es8311_speak(const char*, uint16_t, int8_t) { g_speak_calls++; }
+static void s3_wave_pool_splash(uint8_t, uint8_t, int16_t, uint8_t) {}
+static void s3_espnow_broadcast(uint8_t, uint8_t, int16_t) {}
+static int hive_hash9(const char*, size_t, char sig[10]) { memcpy(sig, "101T01101", 10); return 1; }
+
+#include "guardian_mesh.h"
+#include "omni_cockpit_v22.h"
+
+int main() {
+    guardian_init();
+    omni_pomo_tick(1000);
+    (void)g_board_is_18;
+    // 1. Synthesize full sentence via Audio8-TTS (0x82) -> mutes ES7210 transcriber, locks 0x7C240E10
+    omni_cockpit_handle_serial("TTS I THINK THE WEATHER IN SHINJUKU WILL BE SUNNY TODAY");
+    // 2. Interrupt mid-sentence after 4 of 8 chunks -> truncates message & unmutes transcriber
+    omni_cockpit_handle_serial("VOICE INTERRUPT 4");
+    // 3. Run STT semantic token projection (0x83)
+    omni_cockpit_handle_serial("STT HELLO FROM NAMCO TOKYO");
+    // 4. Test 0x80 Raw Adversarial Matrix breach (0xDEAD0F00) vs 0x81 Shielded Gate Firewall (0x7C240E10)
+    omni_cockpit_handle_serial("TMV 0x80");
+    omni_cockpit_handle_serial("TMV 0x81");
+    ::printf("# SPEAK_CALLS|%d\n", g_speak_calls);
+    return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cpp_path = Path(tmpdir) / "voice_test.cpp"
+            bin_path = Path(tmpdir) / "voice_bin"
+            cpp_path.write_text(cpp_voice_test, encoding="utf-8")
+            subprocess.run(
+                ["g++", "-std=c++17", "-Wall", "-Wextra", "-Werror", f"-I{REPO_ROOT / 'src'}", str(cpp_path), "-o", str(bin_path)],
+                check=True,
+            )
+            proc = subprocess.run([str(bin_path)], capture_output=True, text=True, check=True)
+            lines = [ln.strip() for ln in proc.stdout.splitlines() if ln.strip()]
+
+        audio8_lines = [json.loads(ln.split("|", 1)[1]) for ln in lines if ln.startswith("# AUDIO8|")]
+        voice_lines = [json.loads(ln.split("|", 1)[1]) for ln in lines if ln.startswith("# VOICE_AI|")]
+
+        self.assertEqual(len(audio8_lines), 5)
+        self.assertEqual(len(voice_lines), 5)
+
+        # 1. TTS (0x82): 64x64 zero-padding verified, 0x7C240E10 locked, transcriber muted during playback
+        self.assertEqual(audio8_lines[0]["mode"], "0x82")
+        self.assertEqual(audio8_lines[0]["dim"], 896)
+        self.assertEqual(audio8_lines[0]["inter"], 4864)
+        self.assertEqual(audio8_lines[0]["codebook_size"], 4096)
+        self.assertTrue(audio8_lines[0]["zero_padding_64x64"])
+        self.assertEqual(audio8_lines[0]["ebpf_verdict"], "0x7c240e10")
+        self.assertTrue(voice_lines[0]["transcriber_muted"])
+        self.assertTrue(voice_lines[0]["bot_speaking"])
+        self.assertFalse(voice_lines[0]["interrupted"])
+
+        # 2. Barge-In Interrupt (4/8 chunks -> smoothstep fade 1/2, message cut off cleanly, transcriber unmuted)
+        self.assertTrue(voice_lines[1]["interrupted"])
+        self.assertFalse(voice_lines[1]["bot_speaking"])
+        self.assertFalse(voice_lines[1]["transcriber_muted"])
+        self.assertEqual(voice_lines[1]["aurora_fade_pq"], "1/2")
+        self.assertNotEqual(voice_lines[1]["last_bot_msg"], voice_lines[1]["full_bot_msg"])
+        self.assertTrue(voice_lines[1]["full_bot_msg"].startswith(voice_lines[1]["last_bot_msg"]))
+
+        # 3. STT (0x83): semantic token in [151678, 155773]
+        self.assertEqual(audio8_lines[2]["mode"], "0x83")
+        self.assertGreaterEqual(audio8_lines[2]["semantic_id"], 151678)
+        self.assertLessEqual(audio8_lines[2]["semantic_id"], 155773)
+        self.assertEqual(voice_lines[2]["last_stt"], "HELLO FROM NAMCO TOKYO")
+
+        # 4. Mode 0x80 Raw Adversarial Matrix -> 4 dipole breaches -> 0xdead0f00 vs Mode 0x81 Shielded -> 0x7c240e10
+        self.assertEqual(audio8_lines[3]["mode"], "0x80")
+        self.assertEqual(audio8_lines[3]["breaches"], 4)
+        self.assertEqual(audio8_lines[3]["ebpf_verdict"], "0xdead0f00")
+        self.assertEqual(audio8_lines[4]["mode"], "0x81")
+        self.assertEqual(audio8_lines[4]["breaches"], 0)
+        self.assertEqual(audio8_lines[4]["ebpf_verdict"], "0x7c240e10")
+
 
 if __name__ == "__main__":
     unittest.main()
