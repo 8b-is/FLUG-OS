@@ -37,12 +37,30 @@
 #define S3_MAX_CHANNEL  13
 #define S3_MESH_CHANNEL 1
 
+#ifndef FLUGOS_WAVE_CORE_VOICE_MESH_FFI
+#define FLUGOS_WAVE_CORE_VOICE_MESH_FFI
+typedef struct {
+  int32_t predictor;
+  int32_t index;
+} FlugAdpcmState;
+
+typedef struct {
+  int32_t y1;
+  int32_t y2;
+} FlugQ15Biquad;
+#endif
+
 extern "C" {
   void rust_reduce_rational_pq(int32_t num, int32_t den, int32_t *out_p, int32_t *out_q);
   size_t rust_parse_80211_probe_ie(const uint8_t *payload, size_t len, uint8_t fsub, uint8_t *out_ssid33, uint32_t *out_vendor_oui, uint8_t *out_phy_caps);
   uint8_t rust_fingerprint_80211_probe(const uint8_t *payload, size_t len, int8_t rssi, uint32_t *out_sig_hash, uint16_t *out_unique_sigs, uint32_t *out_total_rotations, uint16_t *out_sig_rotations);
   void rust_step_watch_wave_pool_64(int16_t *u_curr, int16_t *u_prev, int32_t damp, int8_t *nand_ring7, int8_t combined_trit);
   void rust_build_baye_splash_capsule(uint8_t *out_buf64, const uint8_t *src_mac6, uint8_t seq, uint32_t uptime_ms, uint16_t energy_u16, uint16_t f0_hz, uint8_t salience_pct);
+  void rust_flugos_adpcm_encode_frame(const int16_t *pcm_in, uint8_t *adpcm_out, FlugAdpcmState *st);
+  void rust_flugos_adpcm_decode_frame(const uint8_t *adpcm_in, int16_t *pcm_out, FlugAdpcmState *st);
+  uint32_t rust_flugos_simd_rms_and_zcr(const int16_t *pcm_in);
+  int32_t rust_flugos_pie_int8_dot_16x(const int8_t *weights_16b_aligned, const int8_t *activations_16b_aligned, size_t blocks_of_16);
+  void rust_flugos_render_q15_phoneme_chunk(uint8_t ch, FlugQ15Biquad *r1, FlugQ15Biquad *r2, uint32_t *phase_q16, uint32_t *lfsr, int16_t *out_dma);
 }
 static volatile int g_s3_sun_ch = S3_MESH_CHANNEL;
 static char g_s3_last_probed_ssid[33] = "NONE";
