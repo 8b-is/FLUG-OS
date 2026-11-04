@@ -51,7 +51,7 @@ jobs:
 
       - name: Rename artifact with version
         run: |
-          VERSION="v$(grep FLUGOS_VERSION src/version.h | head -1 | cut -d'"' -f2)"
+          VERSION="v$(grep FLUGOS_VERSION_STR src/version.h | head -1 | cut -d'"' -f2)"
           cp .pio/build/${{ matrix.env }}/firmware.bin flugos-${{ matrix.env }}-$VERSION.bin
           cp .pio/build/${{ matrix.env }}/firmware.elf flugos-${{ matrix.env }}-$VERSION.elf 2>/dev/null || true
 
