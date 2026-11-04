@@ -27,7 +27,21 @@
 #include <Arduino.h>
 
 extern "C" {
+#if defined(FLUGOS_S3_AMOLED) || defined(FLUGOS_RUST_RATIONAL_PQ_DECL_ONLY)
   void rust_reduce_rational_pq(int32_t num, int32_t den, int32_t *out_p, int32_t *out_q);
+#elif !defined(FLUGOS_RUST_RATIONAL_PQ_DEFINED)
+#define FLUGOS_RUST_RATIONAL_PQ_DEFINED 1
+  inline void rust_reduce_rational_pq(int32_t num, int32_t den, int32_t *out_p, int32_t *out_q) {
+      if (den == 0) { *out_p = 0; *out_q = 1; return; }
+      if (den < 0) { num = -num; den = -den; }
+      if (num == 0) { *out_p = 0; *out_q = 1; return; }
+      int32_t a = num < 0 ? -num : num;
+      int32_t b = den;
+      while (b != 0) { int32_t t = a % b; a = b; b = t; }
+      *out_p = num / a;
+      *out_q = den / a;
+  }
+#endif
 }
 
 #define DENSITY_WINDOW   100
