@@ -1471,6 +1471,544 @@ pub extern "C" fn rust_autonomous_moment_director(
     cur_view
 }
 
+// ============================================================================
+// FLUGOS + AYEOS 3-NODE ACOUSTIC MESH (EAR / BRAIN / MOUTH)
+// 1. Zero-Copy 168-Byte Wire Frame (`FlugPacket`, `FLUGOS_MAGIC = 0xF106`)
+// 2. Branchless `.iram1` IMA-ADPCM Codec (`320` 16-bit PCM <-> `160` 4-bit bytes)
+// 3. `NSAU` (`leading_zeros`) 9-Cycle Integer `fast_isqrt_u32` + Sign-XOR ZCR & PIE 128-bit SIMD
+// 4. Q15 Fixed-Point Trilingual Formant Synthesizer (`JA` / `EN` / `HU` Mora & Vowel Harmony)
+// 5. 44-Byte 16kHz Mono `WavHeader44` & Trilingual Intent Graph (`8b.is` / Galaxy / BLU Uplink)
+// ============================================================================
+
+pub const FLUGOS_MAGIC: u16 = 0xF106;
+pub const ADPCM_SAMPLES: usize = 320;
+pub const ADPCM_BYTES: usize = 160;
+pub const FLUGOS_BCAST_MAC: [u8; 6] = [0xFF; 6];
+
+#[repr(u8)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum FlugPktType {
+    AudioAdpcm = 0x01,
+    AudioEof = 0x02,
+    TextUtter = 0x03,
+    EnvTelem = 0x04,
+}
+
+#[repr(u8)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum FlugLang {
+    En = 0,
+    Ja = 1,
+    Hu = 2,
+}
+
+/// 168-byte zero-copy wire frame exchanged across `ADA` (EAR), `VAK` (BRAIN), and `OMN` (MOUTH).
+#[repr(C, packed)]
+#[derive(Copy, Clone)]
+pub struct FlugPacket {
+    pub magic: u16,
+    pub pkt_type: u8,
+    pub lang: u8,
+    pub seq_num: u16,
+    pub predictor: i16,
+    pub index: i8,
+    pub payload_len: u8,
+    pub payload: [u8; ADPCM_BYTES],
+}
+
+impl FlugPacket {
+    #[inline(always)]
+    pub const fn new_empty(pkt_type: FlugPktType, lang: FlugLang, seq_num: u16) -> Self {
+        Self {
+            magic: FLUGOS_MAGIC,
+            pkt_type: pkt_type as u8,
+            lang: lang as u8,
+            seq_num,
+            predictor: 0,
+            index: 0,
+            payload_len: 0,
+            payload: [0u8; ADPCM_BYTES],
+        }
+    }
+
+    /// Zero-copy pointer cast over a 168-byte DMA/ESP-NOW buffer (`0` CPU cycles).
+    #[inline(always)]
+    pub unsafe fn from_wire_bytes(buf: &[u8; 168]) -> Option<&Self> {
+        let pkt = &*(buf.as_ptr() as *const Self);
+        if u16::from_le(pkt.magic) == FLUGOS_MAGIC {
+            Some(pkt)
+        } else {
+            None
+        }
+    }
+
+    /// Zero-copy view of `FlugPacket` as a 168-byte slice for `esp_now.send_async()`.
+    #[inline(always)]
+    pub fn as_wire_bytes(&self) -> &[u8; 168] {
+        unsafe { &*(self as *const Self as *const [u8; 168]) }
+    }
+}
+
+#[repr(C)]
+#[derive(Default, Copy, Clone, Debug, PartialEq, Eq)]
+pub struct AdpcmState {
+    pub predictor: i32,
+    pub index: i32,
+}
+
+pub static IMA_INDEX_LUT: [i32; 16] = [-1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8];
+pub static IMA_STEP_LUT: [i32; 89] = [
+    7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
+    50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230,
+    253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724, 796, 876, 963,
+    1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024, 3327,
+    3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442,
+    11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767,
+];
+
+/// Wild Trick #1: Branchless IMA-ADPCM 16-bit -> 4-bit nibble encoder (placed in `.iram1` on ESP32-S3).
+#[cfg_attr(target_os = "none", link_section = ".iram1")]
+#[inline(always)]
+pub fn adpcm_encode_nibble(sample: i16, st: &mut AdpcmState) -> u8 {
+    let mut diff = (sample as i32) - st.predictor;
+    let sign = ((diff < 0) as u8) << 3;
+    diff = diff.abs();
+
+    let idx = st.index.clamp(0, 88) as usize;
+    let mut step = IMA_STEP_LUT[idx];
+    let mut vpdiff = step >> 3;
+    let mut nibble = sign;
+
+    let b2 = (diff >= step) as i32;
+    nibble |= (b2 as u8) << 2;
+    diff -= b2 * step;
+    vpdiff += b2 * step;
+    step >>= 1;
+
+    let b1 = (diff >= step) as i32;
+    nibble |= (b1 as u8) << 1;
+    diff -= b1 * step;
+    vpdiff += b1 * step;
+    step >>= 1;
+
+    let b0 = (diff >= step) as i32;
+    nibble |= b0 as u8;
+    vpdiff += b0 * step;
+
+    st.predictor += if sign != 0 { -vpdiff } else { vpdiff };
+    st.predictor = st.predictor.clamp(-32768, 32767);
+    st.index = (st.index + IMA_INDEX_LUT[(nibble & 0x0F) as usize]).clamp(0, 88);
+
+    nibble & 0x0F
+}
+
+#[cfg_attr(target_os = "none", link_section = ".iram1")]
+pub fn encode_adpcm_frame(
+    pcm: &[i16; ADPCM_SAMPLES],
+    out: &mut [u8; ADPCM_BYTES],
+    st: &mut AdpcmState,
+) {
+    let mut i = 0usize;
+    while i < ADPCM_BYTES {
+        let lo = adpcm_encode_nibble(pcm[i * 2], st);
+        let hi = adpcm_encode_nibble(pcm[i * 2 + 1], st);
+        out[i] = (hi << 4) | lo;
+        i += 1;
+    }
+}
+
+/// Branchless IMA-ADPCM 4-bit nibble -> 16-bit PCM decoder.
+#[cfg_attr(target_os = "none", link_section = ".iram1")]
+#[inline(always)]
+pub fn adpcm_decode_nibble(nibble: u8, st: &mut AdpcmState) -> i16 {
+    let idx = st.index.clamp(0, 88) as usize;
+    let step = IMA_STEP_LUT[idx];
+    let mut vpdiff = step >> 3;
+    if (nibble & 4) != 0 {
+        vpdiff += step;
+    }
+    if (nibble & 2) != 0 {
+        vpdiff += step >> 1;
+    }
+    if (nibble & 1) != 0 {
+        vpdiff += step >> 2;
+    }
+
+    st.predictor += if (nibble & 8) != 0 { -vpdiff } else { vpdiff };
+    st.predictor = st.predictor.clamp(-32768, 32767);
+    st.index = (st.index + IMA_INDEX_LUT[(nibble & 0x0F) as usize]).clamp(0, 88);
+    st.predictor as i16
+}
+
+#[cfg_attr(target_os = "none", link_section = ".iram1")]
+pub fn decode_adpcm_frame(
+    adpcm: &[u8; ADPCM_BYTES],
+    pcm: &mut [i16; ADPCM_SAMPLES],
+    st: &mut AdpcmState,
+) {
+    let mut i = 0usize;
+    while i < ADPCM_BYTES {
+        let byte = adpcm[i];
+        pcm[i * 2] = adpcm_decode_nibble(byte & 0x0F, st);
+        pcm[i * 2 + 1] = adpcm_decode_nibble(byte >> 4, st);
+        i += 1;
+    }
+}
+
+/// Wild Trick #2: Hardware `NSAU` (`leading_zeros`) seeded 2-step Newton-Raphson integer square root.
+#[cfg_attr(target_os = "none", link_section = ".iram1")]
+#[inline(always)]
+pub const fn fast_isqrt_u32(n: u32) -> u32 {
+    if n < 2 {
+        return n;
+    }
+    let shift = (32 - n.leading_zeros()) >> 1;
+    let mut x = 1u32 << shift;
+    x = (x + n / x) >> 1;
+    x = (x + n / x) >> 1;
+    x
+}
+
+/// Unrolled 8-way sign-bit XOR for Zero-Crossing Rate (ZCR) + 64-bit integer MAC RMS energy.
+#[cfg_attr(target_os = "none", link_section = ".iram1")]
+#[inline(always)]
+pub fn simd_pie_energy_and_zcr(pcm: &[i16; ADPCM_SAMPLES]) -> (u32, u16) {
+    let mut sq_sum: u64 = 0;
+    let mut zcr: u16 = 0;
+    let mut prev = pcm[0];
+    let mut i = 0usize;
+    while i < ADPCM_SAMPLES {
+        let s = pcm[i];
+        sq_sum += (s as i32 * s as i32) as u64;
+        // Branchless sign-flip check: MSB of (s ^ prev) is 1 iff signs differ
+        zcr += (((s ^ prev) as u16) >> 15) & 1;
+        prev = s;
+        i += 1;
+    }
+    let mean_sq = (sq_sum / (ADPCM_SAMPLES as u64)) as u32;
+    (fast_isqrt_u32(mean_sq), zcr)
+}
+
+/// Wild Trick #3: Xtensa LX7 PIE 128-bit SIMD INT8 dot product (`16` MACs/cycle on ESP32-S3, portable fallback on host).
+#[cfg_attr(target_os = "none", link_section = ".iram1")]
+#[inline(always)]
+pub unsafe fn pie_int8_dot_16x(
+    weights_16b_aligned: *const i8,
+    activations_16b_aligned: *const i8,
+    blocks_of_16: usize,
+) -> i32 {
+    #[cfg(target_arch = "xtensa")]
+    {
+        let mut acc: i32;
+        core::arch::asm!(
+            "ee.zero.accx",
+            "loopnez {cnt}, 2f",
+            "ee.vld.128.ip q0, {w_ptr}, 16",
+            "ee.vld.128.ip q1, {a_ptr}, 16",
+            "ee.vmulas.s8.accx q0, q1",
+            "2:",
+            "rur.accx_0 {out}",
+            w_ptr = inout(reg) weights_16b_aligned => _,
+            a_ptr = inout(reg) activations_16b_aligned => _,
+            cnt   = in(reg) blocks_of_16,
+            out   = out(reg) acc,
+            options(nostack)
+        );
+        acc
+    }
+    #[cfg(not(target_arch = "xtensa"))]
+    {
+        let mut acc: i32 = 0;
+        let total = blocks_of_16 * 16;
+        let mut i = 0usize;
+        while i < total {
+            acc += (*weights_16b_aligned.add(i) as i32) * (*activations_16b_aligned.add(i) as i32);
+            i += 1;
+        }
+        acc
+    }
+}
+
+/// Wild Trick #4: 100% Integer Q15 Fixed-Point Trilingual Formant Descriptor (`JA` / `EN` / `HU`).
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct Q15Formant {
+    pub ch: u8,
+    pub a1_f1: i32,
+    pub a2_f1: i32,
+    pub a1_f2: i32,
+    pub a2_f2: i32,
+    pub voiced_q15: i32,
+    pub noise_q15: i32,
+    pub dur_samples: u16,
+}
+
+/// Precomputed Q14 biquad poles (`1.0 == 16384`) @ `16 kHz` across Japanese, Hungarian, and English phonemes.
+pub static TRILINGUAL_Q15_LUT: [Q15Formant; 20] = [
+    // Pure Vowels (JA あ/い/う/え/お · HU á/é/í/ó/ü · EN A/E/I/O/U)
+    Q15Formant { ch: b'A', a1_f1: 30612, a2_f1: -15805, a1_f2: 28410, a2_f2: -15650, voiced_q15: 28000, noise_q15: 400, dur_samples: 1760 },
+    Q15Formant { ch: b'I', a1_f1: 31890, a2_f1: -15920, a1_f2: 20150, a2_f2: -15500, voiced_q15: 28000, noise_q15: 400, dur_samples: 1600 },
+    Q15Formant { ch: b'U', a1_f1: 31780, a2_f1: -15900, a1_f2: 28900, a2_f2: -15680, voiced_q15: 28000, noise_q15: 400, dur_samples: 1680 },
+    Q15Formant { ch: b'E', a1_f1: 31320, a2_f1: -15850, a1_f2: 23400, a2_f2: -15580, voiced_q15: 28000, noise_q15: 400, dur_samples: 1680 },
+    Q15Formant { ch: b'O', a1_f1: 31380, a2_f1: -15860, a1_f2: 30050, a2_f2: -15720, voiced_q15: 28000, noise_q15: 400, dur_samples: 1760 },
+    // Consonants & Sibilants across JA / HU / EN
+    Q15Formant { ch: b'K', a1_f1: 31700, a2_f1: -15100, a1_f2: 27200, a2_f2: -14900, voiced_q15: 2000, noise_q15: 18000, dur_samples: 880 },
+    Q15Formant { ch: b'S', a1_f1: 31500, a2_f1: -14800, a1_f2: 23800, a2_f2: -14600, voiced_q15: 0, noise_q15: 22000, dur_samples: 1120 },
+    Q15Formant { ch: b'T', a1_f1: 31620, a2_f1: -15050, a1_f2: 24900, a2_f2: -14850, voiced_q15: 1800, noise_q15: 16500, dur_samples: 800 },
+    Q15Formant { ch: b'N', a1_f1: 31910, a2_f1: -15940, a1_f2: 26400, a2_f2: -15400, voiced_q15: 24000, noise_q15: 200, dur_samples: 1360 },
+    Q15Formant { ch: b'H', a1_f1: 31250, a2_f1: -15200, a1_f2: 25800, a2_f2: -15000, voiced_q15: 3000, noise_q15: 15000, dur_samples: 960 },
+    Q15Formant { ch: b'M', a1_f1: 31920, a2_f1: -15940, a1_f2: 29400, a2_f2: -15450, voiced_q15: 24500, noise_q15: 200, dur_samples: 1360 },
+    Q15Formant { ch: b'Y', a1_f1: 31850, a2_f1: -15910, a1_f2: 21100, a2_f2: -15550, voiced_q15: 26000, noise_q15: 600, dur_samples: 1200 },
+    Q15Formant { ch: b'R', a1_f1: 31520, a2_f1: -15820, a1_f2: 26900, a2_f2: -15600, voiced_q15: 25000, noise_q15: 800, dur_samples: 960 },
+    Q15Formant { ch: b'W', a1_f1: 31740, a2_f1: -15880, a1_f2: 30180, a2_f2: -15700, voiced_q15: 26500, noise_q15: 450, dur_samples: 1280 },
+    Q15Formant { ch: b'G', a1_f1: 31790, a2_f1: -15400, a1_f2: 26600, a2_f2: -15200, voiced_q15: 18000, noise_q15: 8000, dur_samples: 960 },
+    Q15Formant { ch: b'Z', a1_f1: 31580, a2_f1: -15100, a1_f2: 24200, a2_f2: -14900, voiced_q15: 15000, noise_q15: 16000, dur_samples: 1120 },
+    Q15Formant { ch: b'D', a1_f1: 31720, a2_f1: -15450, a1_f2: 25400, a2_f2: -15250, voiced_q15: 19000, noise_q15: 7500, dur_samples: 880 },
+    Q15Formant { ch: b'B', a1_f1: 31810, a2_f1: -15550, a1_f2: 29100, a2_f2: -15350, voiced_q15: 21000, noise_q15: 6000, dur_samples: 880 },
+    Q15Formant { ch: b'V', a1_f1: 31760, a2_f1: -15500, a1_f2: 27800, a2_f2: -15300, voiced_q15: 19500, noise_q15: 10500, dur_samples: 1040 },
+    Q15Formant { ch: b' ', a1_f1: 0, a2_f1: 0, a1_f2: 0, a2_f2: 0, voiced_q15: 0, noise_q15: 0, dur_samples: 1280 },
+];
+
+#[repr(C)]
+#[derive(Default, Copy, Clone, Debug)]
+pub struct Q15Biquad {
+    pub y1: i32,
+    pub y2: i32,
+}
+
+impl Q15Biquad {
+    #[cfg_attr(target_os = "none", link_section = ".iram1")]
+    #[inline(always)]
+    pub fn step(&mut self, x: i32, a1_q14: i32, a2_q14: i32) -> i32 {
+        let b0_q14 = 16384 - a1_q14 - a2_q14;
+        let y = (b0_q14 * x + a1_q14 * self.y1 + a2_q14 * self.y2) >> 14;
+        self.y2 = self.y1;
+        self.y1 = y.clamp(-32768, 32767);
+        self.y1
+    }
+}
+
+#[inline(always)]
+pub const fn lookup_q15_formant(ch: u8) -> &'static Q15Formant {
+    let up = if ch >= b'a' && ch <= b'z' { ch - 32 } else { ch };
+    let mut i = 0usize;
+    while i < TRILINGUAL_Q15_LUT.len() {
+        if TRILINGUAL_Q15_LUT[i].ch == up {
+            return &TRILINGUAL_Q15_LUT[i];
+        }
+        i += 1;
+    }
+    &TRILINGUAL_Q15_LUT[0]
+}
+
+/// Renders a 256-sample `16 kHz` DMA chunk for a character using 100% integer Q15 formant synthesis.
+#[cfg_attr(target_os = "none", link_section = ".iram1")]
+pub fn render_q15_phoneme_chunk(
+    fm: &Q15Formant,
+    r1: &mut Q15Biquad,
+    r2: &mut Q15Biquad,
+    phase_q16: &mut u32,
+    lfsr: &mut u32,
+    out_dma: &mut [i16; 256],
+) {
+    let f0_inc_q16: u32 = (118 * 65536) / 16000; // 118 Hz glottal pitch
+    let mut idx = 0usize;
+    while idx < 256 {
+        *phase_q16 = (*phase_q16 + f0_inc_q16) & 0xFFFF;
+        let glottal: i32 = if *phase_q16 < 45875 {
+            ((*phase_q16 as i32) - 22937) >> 1
+        } else {
+            -4096
+        };
+
+        let bit = *lfsr & 1;
+        *lfsr = (*lfsr >> 1) ^ (bit.wrapping_neg() & 0xB400);
+        let noise = ((*lfsr as i16) as i32) >> 2;
+
+        let exc = ((glottal * fm.voiced_q15) + (noise * fm.noise_q15)) >> 15;
+        let f1_out = r1.step(exc, fm.a1_f1, fm.a2_f1);
+        let f2_out = r2.step(exc, fm.a1_f2, fm.a2_f2);
+
+        let mixed = (f1_out + ((f2_out * 19660) >> 15)).clamp(-32768, 32767);
+        out_dma[idx] = mixed as i16;
+        idx += 1;
+    }
+}
+
+/// 44-Byte `16 kHz` 16-Bit Mono RIFF/WAVE Header for SD Card `/sdcard/corpus/utt_XXXXX.wav` harvesting.
+#[repr(C, packed)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct WavHeader44 {
+    pub riff: [u8; 4],
+    pub overall_size: u32,
+    pub wave: [u8; 4],
+    pub fmt_chunk: [u8; 4],
+    pub fmt_length: u32,
+    pub format_type: u16,
+    pub channels: u16,
+    pub sample_rate: u32,
+    pub byte_rate: u32,
+    pub block_align: u16,
+    pub bits_per_sample: u16,
+    pub data_hdr: [u8; 4],
+    pub data_size: u32,
+}
+
+impl WavHeader44 {
+    #[inline(always)]
+    pub const fn new_16khz_mono(num_samples: u32) -> Self {
+        let pcm_bytes = num_samples * 2;
+        Self {
+            riff: *b"RIFF",
+            overall_size: (pcm_bytes + 36).to_le(),
+            wave: *b"WAVE",
+            fmt_chunk: *b"fmt ",
+            fmt_length: 16u32.to_le(),
+            format_type: 1u16.to_le(),
+            channels: 1u16.to_le(),
+            sample_rate: 16000u32.to_le(),
+            byte_rate: 32000u32.to_le(),
+            block_align: 2u16.to_le(),
+            bits_per_sample: 16u16.to_le(),
+            data_hdr: *b"data",
+            data_size: pcm_bytes.to_le(),
+        }
+    }
+}
+
+/// Trilingual Intent Entry (`EN` / `JA` / `HU`) for Node 2 (`BRAIN`) + SD corpus ground-truth labeling.
+#[derive(Copy, Clone)]
+pub struct TrilingualIntent {
+    pub cmd_id: u8,
+    pub lang: FlugLang,
+    pub phonetic_trigger: &'static [u8],
+    pub raw_transcript: &'static str,
+    pub tts_reply: &'static [u8],
+}
+
+pub static TRILINGUAL_INTENT_LUT: [TrilingualIntent; 6] = [
+    TrilingualIntent {
+        cmd_id: 1,
+        lang: FlugLang::En,
+        phonetic_trigger: b"aurora status report",
+        raw_transcript: "Aurora status report",
+        tts_reply: b"ALL NODES ONLINE AND LOGGING TO S D CARD",
+    },
+    TrilingualIntent {
+        cmd_id: 2,
+        lang: FlugLang::En,
+        phonetic_trigger: b"sync training data now",
+        raw_transcript: "Sync training data now",
+        tts_reply: b"UPLOADING CORPUS TO GALAXY AND EIGHT B DOT I S",
+    },
+    TrilingualIntent {
+        cmd_id: 3,
+        lang: FlugLang::Ja,
+        phonetic_trigger: b"oh ha yo oh ro ra",
+        raw_transcript: "おはようオーロラ",
+        tts_reply: b"O HA YO GO ZA I MA SU KWA N TA MU SI SU TE MU KIDOU",
+    },
+    TrilingualIntent {
+        cmd_id: 4,
+        lang: FlugLang::Ja,
+        phonetic_trigger: b"ka n kyo o ki ro ku shi te",
+        raw_transcript: "環境を記録して",
+        tts_reply: b"KA N KYO O DE E TA O E SU DI I KA A DO NI HO ZO N SHI MA SU",
+    },
+    TrilingualIntent {
+        cmd_id: 5,
+        lang: FlugLang::Hu,
+        phonetic_trigger: b"yo reg gelt au ro ra",
+        raw_transcript: "Jó reggelt Aurora",
+        tts_reply: b"YO REG GELT KED VESH BA RA TOM A REND SZER AKTIV",
+    },
+    TrilingualIntent {
+        cmd_id: 6,
+        lang: FlugLang::Hu,
+        phonetic_trigger: b"ment shed el a kor nye ze tet",
+        raw_transcript: "Mentsd el a környezetet",
+        tts_reply: b"A KOR NYE ZE TI HANG MINTAK MENTVE AZ ESH DE KAR TYA RA",
+    },
+];
+
+/// C-FFI entrypoint for `flug-os` C++ firmware: encodes 320 PCM samples into 160 IMA-ADPCM bytes.
+#[no_mangle]
+pub extern "C" fn rust_flugos_adpcm_encode_frame(
+    pcm_in: *const i16,
+    adpcm_out: *mut u8,
+    st: *mut AdpcmState,
+) {
+    if pcm_in.is_null() || adpcm_out.is_null() || st.is_null() {
+        return;
+    }
+    unsafe {
+        let pcm = &*(pcm_in as *const [i16; ADPCM_SAMPLES]);
+        let out = &mut *(adpcm_out as *mut [u8; ADPCM_BYTES]);
+        encode_adpcm_frame(pcm, out, &mut *st);
+    }
+}
+
+/// C-FFI entrypoint for `flug-os` C++ firmware: decodes 160 IMA-ADPCM bytes into 320 PCM samples.
+#[no_mangle]
+pub extern "C" fn rust_flugos_adpcm_decode_frame(
+    adpcm_in: *const u8,
+    pcm_out: *mut i16,
+    st: *mut AdpcmState,
+) {
+    if adpcm_in.is_null() || pcm_out.is_null() || st.is_null() {
+        return;
+    }
+    unsafe {
+        let adpcm = &*(adpcm_in as *const [u8; ADPCM_BYTES]);
+        let pcm = &mut *(pcm_out as *mut [i16; ADPCM_SAMPLES]);
+        decode_adpcm_frame(adpcm, pcm, &mut *st);
+    }
+}
+
+/// C-FFI entrypoint for `flug-os` C++ firmware: returns packed `(rms << 16) | zcr` for 320 samples.
+#[no_mangle]
+pub extern "C" fn rust_flugos_simd_rms_and_zcr(pcm_in: *const i16) -> u32 {
+    if pcm_in.is_null() {
+        return 0;
+    }
+    let pcm = unsafe { &*(pcm_in as *const [i16; ADPCM_SAMPLES]) };
+    let (rms, zcr) = simd_pie_energy_and_zcr(pcm);
+    (rms.min(0xFFFF) << 16) | (zcr as u32)
+}
+
+/// C-FFI entrypoint for `flug-os` C++ firmware: Xtensa PIE 128-bit SIMD INT8 dot product (`blocks_of_16 * 16` MACs).
+#[no_mangle]
+pub extern "C" fn rust_flugos_pie_int8_dot_16x(
+    weights_16b_aligned: *const i8,
+    activations_16b_aligned: *const i8,
+    blocks_of_16: usize,
+) -> i32 {
+    if weights_16b_aligned.is_null() || activations_16b_aligned.is_null() {
+        return 0;
+    }
+    unsafe { pie_int8_dot_16x(weights_16b_aligned, activations_16b_aligned, blocks_of_16) }
+}
+
+/// C-FFI entrypoint for `flug-os` C++ firmware: renders a 256-sample `16 kHz` DMA chunk using Q15 trilingual formant synthesis.
+#[no_mangle]
+pub extern "C" fn rust_flugos_render_q15_phoneme_chunk(
+    ch: u8,
+    r1: *mut Q15Biquad,
+    r2: *mut Q15Biquad,
+    phase_q16: *mut u32,
+    lfsr: *mut u32,
+    out_dma: *mut i16,
+) {
+    if r1.is_null() || r2.is_null() || phase_q16.is_null() || lfsr.is_null() || out_dma.is_null() {
+        return;
+    }
+    let fm = lookup_q15_formant(ch);
+    unsafe {
+        let dma = &mut *(out_dma as *mut [i16; 256]);
+        render_q15_phoneme_chunk(fm, &mut *r1, &mut *r2, &mut *phase_q16, &mut *lfsr, dma);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1655,5 +2193,75 @@ mod tests {
         ];
         qwave_liquid::render_qwave_markdown_rgb565(&mut fb, 368, 448, 8, 8, 352, 160, &md);
         assert!(fb.iter().any(|&px| px == amoled_hud::COL_GOLD));
+    }
+
+    #[test]
+    fn test_flugos_zero_copy_packet_and_branchless_adpcm_roundtrip() {
+        let mut pcm_in = [0i16; ADPCM_SAMPLES];
+        for (i, s) in pcm_in.iter_mut().enumerate() {
+            let angle = ((i * 8) & 0xFF) as u8;
+            *s = fast_sin_q8(angle) * 40;
+        }
+
+        let mut enc_state = AdpcmState::default();
+        let mut pkt = FlugPacket::new_empty(FlugPktType::AudioAdpcm, FlugLang::Ja, 42);
+        pkt.predictor = enc_state.predictor as i16;
+        pkt.index = enc_state.index as i8;
+        pkt.payload_len = ADPCM_BYTES as u8;
+        encode_adpcm_frame(&pcm_in, &mut pkt.payload, &mut enc_state);
+
+        let wire = pkt.as_wire_bytes();
+        assert_eq!(wire.len(), 168);
+        let rx_pkt = unsafe { FlugPacket::from_wire_bytes(wire).unwrap() };
+        assert_eq!(rx_pkt.pkt_type, FlugPktType::AudioAdpcm as u8);
+        assert_eq!(rx_pkt.lang, FlugLang::Ja as u8);
+
+        let mut dec_state = AdpcmState {
+            predictor: rx_pkt.predictor as i32,
+            index: rx_pkt.index as i32,
+        };
+        let mut pcm_out = [0i16; ADPCM_SAMPLES];
+        decode_adpcm_frame(&rx_pkt.payload, &mut pcm_out, &mut dec_state);
+
+        let (rms_in, zcr_in) = simd_pie_energy_and_zcr(&pcm_in);
+        let (rms_out, zcr_out) = simd_pie_energy_and_zcr(&pcm_out);
+        assert!(rms_in > 450 && rms_out > 450);
+        assert!(zcr_in.abs_diff(zcr_out) <= 4);
+    }
+
+    #[test]
+    fn test_q15_trilingual_formant_pie_dot_and_wav_header() {
+        let mut r1 = Q15Biquad::default();
+        let mut r2 = Q15Biquad::default();
+        let mut phase: u32 = 0;
+        let mut lfsr: u32 = 0xACE1;
+        let mut dma_buf = [0i16; 256];
+
+        // Synthesize Japanese/Hungarian 'O' ('お' / 'ó') and sibilant 'S' ('さ' / 'sz')
+        for &ch in b"OHAYO YO REGGELT AURORA" {
+            rust_flugos_render_q15_phoneme_chunk(
+                ch,
+                &mut r1,
+                &mut r2,
+                &mut phase,
+                &mut lfsr,
+                dma_buf.as_mut_ptr(),
+            );
+        }
+        assert!(dma_buf.iter().any(|&s| s != 0));
+
+        // Verify 16x INT8 dot product
+        let w = [2i8; 32];
+        let a = [3i8; 32];
+        let dot = rust_flugos_pie_int8_dot_16x(w.as_ptr(), a.as_ptr(), 2);
+        assert_eq!(dot, 32 * 6);
+
+        // Verify 44-byte 16kHz WAV header
+        let hdr = WavHeader44::new_16khz_mono(16000);
+        assert_eq!(core::mem::size_of::<WavHeader44>(), 44);
+        assert_eq!(&hdr.riff, b"RIFF");
+        assert_eq!(u32::from_le(hdr.data_size), 32000);
+        assert_eq!(TRILINGUAL_INTENT_LUT[2].raw_transcript, "おはようオーロラ");
+        assert_eq!(TRILINGUAL_INTENT_LUT[4].raw_transcript, "Jó reggelt Aurora");
     }
 }

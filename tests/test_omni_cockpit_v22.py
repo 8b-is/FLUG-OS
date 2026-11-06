@@ -633,6 +633,26 @@ int main() {
         self.assertEqual(audio8_lines[4]["breaches"], 0)
         self.assertEqual(audio8_lines[4]["ebpf_verdict"], "0x7c240e10")
 
+    def test_libtdeck_wave_core_voice_mesh_symbols(self):
+        archive_path = REPO_ROOT / "lib" / "rust_wave_core" / "libtdeck_wave_core.a"
+        self.assertTrue(archive_path.is_file())
+        raw_bytes = archive_path.read_bytes()
+        expected_symbols = (
+            b"rust_flugos_adpcm_encode_frame",
+            b"rust_flugos_adpcm_decode_frame",
+            b"rust_flugos_simd_rms_and_zcr",
+            b"rust_flugos_pie_int8_dot_16x",
+            b"rust_flugos_render_q15_phoneme_chunk",
+        )
+        for sym in expected_symbols:
+            self.assertIn(sym, raw_bytes)
+
+        omni_text = OMNI_V22_H.read_text(encoding="utf-8")
+        app_text = S3_APP_H.read_text(encoding="utf-8")
+        for sym_str in (s.decode("ascii") for s in expected_symbols):
+            self.assertIn(sym_str, omni_text)
+            self.assertIn(sym_str, app_text)
+
 
 if __name__ == "__main__":
     unittest.main()
