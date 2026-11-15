@@ -18,6 +18,7 @@
 //!   `320 × 5` RGB565 DMA strips for rows that actually changed.
 
 #![cfg_attr(target_os = "none", no_std)]
+#![cfg_attr(target_arch = "xtensa", feature(asm_experimental_arch))]
 
 pub mod amoled_hud;
 pub mod marine_sense;
