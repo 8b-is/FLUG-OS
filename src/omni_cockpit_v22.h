@@ -962,6 +962,27 @@ static void omni_screen_set_res(uint16_t w, uint16_t h, uint16_t x_gap, const ch
 #define OMNI_AUDIO8_TILE_EXEC_US      18u     // 18 us per 64x64 bit-sliced tile on ESP32-S3
 #define OMNI_ENGRAM_PRIME_0           1000003u
 
+#ifndef FLUGOS_WAVE_CORE_VOICE_MESH_FFI
+#define FLUGOS_WAVE_CORE_VOICE_MESH_FFI
+typedef struct {
+    int32_t predictor;
+    int32_t index;
+} FlugAdpcmState;
+
+typedef struct {
+    int32_t y1;
+    int32_t y2;
+} FlugQ15Biquad;
+
+extern "C" {
+    void rust_flugos_adpcm_encode_frame(const int16_t* pcm_in, uint8_t* adpcm_out, FlugAdpcmState* st);
+    void rust_flugos_adpcm_decode_frame(const uint8_t* adpcm_in, int16_t* pcm_out, FlugAdpcmState* st);
+    uint32_t rust_flugos_simd_rms_and_zcr(const int16_t* pcm_in);
+    int32_t rust_flugos_pie_int8_dot_16x(const int8_t* weights_16b_aligned, const int8_t* activations_16b_aligned, size_t blocks_of_16);
+    void rust_flugos_render_q15_phoneme_chunk(uint8_t ch, FlugQ15Biquad* r1, FlugQ15Biquad* r2, uint32_t* phase_q16, uint32_t* lfsr, int16_t* out_dma);
+}
+#endif
+
 struct OmniVoiceEngineState {
     uint8_t  tmv_mode;            // 0x80=RAW, 0x81=SHIELDED, 0x82=AUDIO8_TTS, 0x83=AUDIO8_STT
     uint8_t  active_page;         // Ping-Pong matrix bank (0 or 1)

@@ -1,0 +1,10 @@
+{
+  "crate": "flug-core",
+  "toolchain": "esp-rs 1.97.0.0",
+  "marine_sense_revision": "e27e767bc3062dbef86920eb0c417429865ac155",
+  "source_sha256": "62597aef3db1e4a9c5781d1bd8b30715ddf0096ea945652c8dcf86b8707d4716",
+  "archive_sha256": "0cbe17506b9eb4f85ca5f4b4b1da9c3759ee6a785bcfec7efeca59f4a3600a83",
+  "target": "xtensa-esp32s3-none-elf",
+  "build_command": "cargo +esp build --release --target xtensa-esp32s3-none-elf -Zbuild-std=core --manifest-path flug-core/Cargo.toml",
+  "validation": "Host packet/codec tests and Xtensa cross-compilation; not flashed or hardware-tested"
+}
