@@ -1473,7 +1473,7 @@ pub extern "C" fn rust_autonomous_moment_director(
 
 // ============================================================================
 // FLUGOS + AYEOS 3-NODE ACOUSTIC MESH (EAR / BRAIN / MOUTH)
-// 1. Zero-Copy 168-Byte Wire Frame (`FlugPacket`, `FLUGOS_MAGIC = 0xF106`)
+// 1. Zero-Copy 170-Byte Wire Frame (`FlugPacket`, `FLUGOS_MAGIC = 0xF106`)
 // 2. Branchless `.iram1` IMA-ADPCM Codec (`320` 16-bit PCM <-> `160` 4-bit bytes)
 // 3. `NSAU` (`leading_zeros`) 9-Cycle Integer `fast_isqrt_u32` + Sign-XOR ZCR & PIE 128-bit SIMD
 // 4. Q15 Fixed-Point Trilingual Formant Synthesizer (`JA` / `EN` / `HU` Mora & Vowel Harmony)
@@ -1483,6 +1483,7 @@ pub extern "C" fn rust_autonomous_moment_director(
 pub const FLUGOS_MAGIC: u16 = 0xF106;
 pub const ADPCM_SAMPLES: usize = 320;
 pub const ADPCM_BYTES: usize = 160;
+pub const FLUG_PACKET_WIRE_LEN: usize = 10 + ADPCM_BYTES;
 pub const FLUGOS_BCAST_MAC: [u8; 6] = [0xFF; 6];
 
 #[repr(u8)]
@@ -1502,7 +1503,7 @@ pub enum FlugLang {
     Hu = 2,
 }
 
-/// 168-byte zero-copy wire frame exchanged across `ADA` (EAR), `VAK` (BRAIN), and `OMN` (MOUTH).
+/// Little-endian ESP-NOW frame with a 10-byte header and 160-byte payload.
 #[repr(C, packed)]
 #[derive(Copy, Clone)]
 pub struct FlugPacket {
@@ -1516,14 +1517,17 @@ pub struct FlugPacket {
     pub payload: [u8; ADPCM_BYTES],
 }
 
+const _: () = assert!(core::mem::size_of::<FlugPacket>() == FLUG_PACKET_WIRE_LEN);
+const _: () = assert!(core::mem::align_of::<FlugPacket>() == 1);
+
 impl FlugPacket {
     #[inline(always)]
     pub const fn new_empty(pkt_type: FlugPktType, lang: FlugLang, seq_num: u16) -> Self {
         Self {
-            magic: FLUGOS_MAGIC,
+            magic: FLUGOS_MAGIC.to_le(),
             pkt_type: pkt_type as u8,
             lang: lang as u8,
-            seq_num,
+            seq_num: seq_num.to_le(),
             predictor: 0,
             index: 0,
             payload_len: 0,
@@ -1531,10 +1535,13 @@ impl FlugPacket {
         }
     }
 
-    /// Zero-copy pointer cast over a 168-byte DMA/ESP-NOW buffer (`0` CPU cycles).
+    /// Borrows a complete frame from a DMA/ESP-NOW receive buffer.
     #[inline(always)]
-    pub unsafe fn from_wire_bytes(buf: &[u8; 168]) -> Option<&Self> {
-        let pkt = &*(buf.as_ptr() as *const Self);
+    pub fn from_wire_bytes(buf: &[u8]) -> Option<&Self> {
+        let bytes: &[u8; FLUG_PACKET_WIRE_LEN] = buf.try_into().ok()?;
+        // The packed frame has byte alignment, matches this array's size, and
+        // contains only integers and bytes, for which every bit pattern is valid.
+        let pkt = unsafe { &*bytes.as_ptr().cast::<Self>() };
         if u16::from_le(pkt.magic) == FLUGOS_MAGIC {
             Some(pkt)
         } else {
@@ -1542,10 +1549,11 @@ impl FlugPacket {
         }
     }
 
-    /// Zero-copy view of `FlugPacket` as a 168-byte slice for `esp_now.send_async()`.
+    /// Borrows the entire packed frame, including the last two payload bytes.
     #[inline(always)]
-    pub fn as_wire_bytes(&self) -> &[u8; 168] {
-        unsafe { &*(self as *const Self as *const [u8; 168]) }
+    pub fn as_wire_bytes(&self) -> &[u8; FLUG_PACKET_WIRE_LEN] {
+        // The packed fields cover every byte of the array without padding.
+        unsafe { &*(self as *const Self).cast::<[u8; FLUG_PACKET_WIRE_LEN]>() }
     }
 }
 
@@ -2196,6 +2204,34 @@ mod tests {
     }
 
     #[test]
+    fn test_flug_packet_wire_format() {
+        let mut expected = [0u8; 170];
+        expected[..10].copy_from_slice(&[0x06, 0xF1, 1, 2, 0x34, 0x12, 0xFE, 0xFF, 8, 160]);
+        let mut packet = FlugPacket::new_empty(FlugPktType::AudioAdpcm, FlugLang::Hu, 0x1234);
+        packet.predictor = (-2i16).to_le();
+        packet.index = 8;
+        packet.payload_len = 160;
+        for i in 0..160 {
+            expected[10 + i] = i as u8;
+            packet.payload[i] = i as u8;
+        }
+        assert_eq!(packet.as_wire_bytes(), &expected);
+
+        let decoded = FlugPacket::from_wire_bytes(&expected).unwrap();
+        assert_eq!(u16::from_le(decoded.seq_num), 0x1234);
+        assert_eq!(i16::from_le(decoded.predictor), -2);
+        assert_eq!(decoded.payload.as_slice(), &expected[10..]);
+        assert_eq!(&decoded.payload[158..], &[158, 159]);
+        assert!(FlugPacket::from_wire_bytes(&expected[..168]).is_none());
+        assert!(FlugPacket::from_wire_bytes(&expected[..169]).is_none());
+        let mut oversized = [0u8; 171];
+        oversized[..170].copy_from_slice(&expected);
+        assert!(FlugPacket::from_wire_bytes(&oversized).is_none());
+        expected[0] ^= 1;
+        assert!(FlugPacket::from_wire_bytes(&expected).is_none());
+    }
+
+    #[test]
     fn test_flugos_zero_copy_packet_and_branchless_adpcm_roundtrip() {
         let mut pcm_in = [0i16; ADPCM_SAMPLES];
         for (i, s) in pcm_in.iter_mut().enumerate() {
@@ -2211,8 +2247,7 @@ mod tests {
         encode_adpcm_frame(&pcm_in, &mut pkt.payload, &mut enc_state);
 
         let wire = pkt.as_wire_bytes();
-        assert_eq!(wire.len(), 168);
-        let rx_pkt = unsafe { FlugPacket::from_wire_bytes(wire).unwrap() };
+        let rx_pkt = FlugPacket::from_wire_bytes(wire).unwrap();
         assert_eq!(rx_pkt.pkt_type, FlugPktType::AudioAdpcm as u8);
         assert_eq!(rx_pkt.lang, FlugLang::Ja as u8);
 
